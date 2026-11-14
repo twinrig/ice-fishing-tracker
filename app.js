@@ -11,7 +11,7 @@ const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
 });
 
-const ROLE_LABEL = { admin: 'Admin', gate: 'Check-in / Gate', weigh: 'Weigh Station', screen: 'Big Screen' };
+const ROLE_LABEL = { admin: 'Admin', gate: 'Gate / Registration', weigh: 'Weigh Station', screen: 'Big Screen' };
 const ROLE_TABS = {
   admin: ['setup', 'participants', 'weighin', 'leaderboard', 'display'],
   gate: ['participants', 'leaderboard', 'display'],
@@ -53,11 +53,8 @@ async function hashUuid(text) { // deterministic UUID so re-imports are idempote
   const h = [...d].map(x => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
-function formatOz(oz) {
-  oz = Number(oz) || 0;
-  const lbs = Math.floor(oz / 16 + 1e-9);
-  return `${lbs} lb ${+(oz - lbs * 16).toFixed(2)} oz`;
-}
+function formatLbs(lbs) { return `${(Number(lbs) || 0).toFixed(2)} lbs`; }
+function round2(n) { return Math.round(Number(n) * 100) / 100; }
 function msg(id, text, ok = true) { const el = $(id); if (!el) return; el.textContent = text; el.className = (el.className.replace(/text-(red|green)-\d+/g, '') + (ok ? ' text-green-700' : ' text-red-600')).trim(); }
 function closeModal(id) { $(id)?.classList.add('hidden'); }
 function openModal(id) { $(id)?.classList.remove('hidden'); }
@@ -104,8 +101,22 @@ function isNetErr(e) { return !!e && !e.code && /fetch|network|load failed|timeo
 function isAuthErr(e) { return !!e && (e.code === 'PGRST301' || e.code === 'PGRST303' || /jwt/i.test(e.message || '')); }
 
 // ---------------------------------------------------------------- online / queue
-let Q = LS.get('ift.queue', []);
-let FAILED = LS.get('ift.failed', []);
+let Q = upgradeOps(LS.get('ift.queue', []));
+let FAILED = upgradeOps(LS.get('ift.failed', []));
+// Changes queued by an older version of the app (ounces, length, initials, check-in) are converted or dropped.
+function upgradeOps(ops) {
+  const out = [];
+  for (const op of ops || []) {
+    const strip = o => { if (!o) return o; delete o.length_in; delete o.staff_initials; delete o.check_in_status; delete o.checked_in_at; delete o.checked_in_by; return o; };
+    if (op.table === 'catches' && op.kind === 'insert' && op.row && op.row.weight_oz != null && op.row.weight_lbs == null) {
+      op.row.weight_lbs = Math.max(0.01, round2(op.row.weight_oz / 16)); delete op.row.weight_oz;
+    }
+    strip(op.row); strip(op.patch);
+    if (op.kind === 'update' && (!op.patch || !Object.keys(op.patch).length)) continue; // check-in only update
+    out.push(op);
+  }
+  return out;
+}
 let flushing = false;
 function saveQueue() { LS.set('ift.queue', Q); LS.set('ift.failed', FAILED); renderConn(); }
 
@@ -192,7 +203,7 @@ function openQueue() { renderQueue(); openModal('queueModal'); }
 function describeOp(op) {
   if (op.table === 'participants' && op.kind === 'insert') return `New participant: ${op.row.display_name} ${op.row.participant_code || '(number pending)'}`;
   if (op.table === 'participants') return `Participant update (${Object.keys(op.patch).join(', ')})`;
-  if (op.kind === 'insert') return `Weigh-in: ${formatOz(op.row.weight_oz)}`;
+  if (op.kind === 'insert') return `Weigh-in: ${formatLbs(op.row.weight_lbs)}`;
   return `Weigh-in update (${Object.keys(op.patch).join(', ')})`;
 }
 function renderQueue() {
@@ -292,7 +303,7 @@ async function selectTournament(tid) {
   fillSetupForm(); refreshViews(); restartPolling();
 }
 
-function cacheKey() { return 'ift.cache.' + S.tid; }
+function cacheKey() { return 'ift.cache2.' + S.tid; } // v2: decimal lbs, no check-in
 function saveCache() {
   if (!S.tid || !S.t) return;
   LS.set(cacheKey(), { t: S.t, species: S.species, configs: S.configs,
@@ -542,7 +553,7 @@ async function importParticipantsCSV() {
     if (existingIds.has(id)) continue;
     existingIds.add(id);
     out.push({ id, tournament_id: S.tid, display_name: name, age_group: (ai >= 0 && r[ai]) || S.t.age_groups?.[0] || null,
-      email, phone, participant_code: code, source, check_in_status: source === 'walkup' ? 'arrived' : 'not_arrived' });
+      email, phone, participant_code: code, source });
   }
   if (!out.length) return msg('importMsg', 'Nothing new to import (already imported?).');
   msg('importMsg', `Importing ${out.length}…`);
@@ -556,24 +567,24 @@ async function importParticipantsCSV() {
 }
 
 function exportParticipants() {
-  const rows = [['id', 'name', 'age_group', 'email', 'phone', 'source', 'check_in', 'checked_in_at']]
+  const rows = [['id', 'name', 'age_group', 'email', 'phone', 'source', 'created_at']]
     .concat(S.participants.slice().sort((a, b) => (a.participant_code || '').localeCompare(b.participant_code || ''))
-      .map(p => [p.participant_code, p.display_name, p.age_group, p.email, p.phone, p.source, p.check_in_status, p.checked_in_at]));
+      .map(p => [p.participant_code, p.display_name, p.age_group, p.email, p.phone, p.source, p.created_at]));
   download(`${slug(S.t?.name)}-participants.csv`, toCSV(rows));
 }
 function exportCatches() {
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
-  const rows = [['ticket', 'id', 'name', 'age_group', 'species', 'lbs', 'oz', 'weight_oz', 'length_in', 'station', 'initials', 'weighed_at', 'status', 'void_reason']]
+  const rows = [['ticket', 'id', 'name', 'age_group', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason']]
     .concat(S.catches.slice().sort((a, b) => (a.weighed_at || '').localeCompare(b.weighed_at || '')).map(c => {
-      const p = pById[c.participant_id] || {}, w = Number(c.weight_oz), lbs = Math.floor(w / 16 + 1e-9);
-      return [c.id, p.participant_code, p.display_name, p.age_group, sById[c.species_id]?.name, lbs, (w - lbs * 16).toFixed(2), w, c.length_in, c.station, c.staff_initials, c.weighed_at, c.status, c.void_reason];
+      const p = pById[c.participant_id] || {};
+      return [c.id, p.participant_code, p.display_name, p.age_group, sById[c.species_id]?.name, Number(c.weight_lbs).toFixed(2), c.station, c.weighed_at, c.status, c.void_reason];
     }));
   download(`${slug(S.t?.name)}-weigh-ins.csv`, toCSV(rows));
 }
 function exportLeaderboard() {
   const data = currentBoards();
-  const rows = [['board', 'rank', 'name', 'age_group', 'fish', 'weight_oz', 'weight']];
-  (data?.boards || []).forEach(b => b.rows.forEach(r => rows.push([b.title, r.rank, r.name, r.group, r.fish, r.oz, formatOz(r.oz)])));
+  const rows = [['board', 'rank', 'name', 'age_group', 'fish', 'lbs']];
+  (data?.boards || []).forEach(b => b.rows.forEach(r => rows.push([b.title, r.rank, r.name, r.group, r.fish, Number(r.lbs).toFixed(2)])));
   download(`${slug(S.t?.name || data?.tournament?.name)}-leaderboard.csv`, toCSV(rows));
 }
 
@@ -619,7 +630,7 @@ function createWalkup() {
   const row = {
     id: uuid(), tournament_id: S.tid, participant_code: takeCode(), display_name: name,
     age_group: $('wAge').value || null, email: $('wEmail').value.trim() || null, phone: $('wPhone').value.trim() || null,
-    source: 'walkup', check_in_status: 'arrived', checked_in_at: new Date().toISOString(), created_at: new Date().toISOString()
+    source: 'walkup', created_at: new Date().toISOString()
   };
   enqueue({ kind: 'insert', table: 'participants', row });
   closeModal('modal');
@@ -634,35 +645,28 @@ function renderParticipants() {
   const f = $('partFilter').value.trim().toLowerCase();
   const list = S.participants.filter(p => !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
     .sort((a, b) => (a.participant_code || 'z').localeCompare(b.participant_code || 'z'));
-  const arrived = S.participants.filter(p => p.check_in_status === 'arrived').length;
-  $('partCount').textContent = `${S.participants.length} registered • ${arrived} checked in`;
+  $('partCount').textContent = `${S.participants.length} registered`;
   el.innerHTML = list.slice(0, 300).map(p => `
     <div class="flex justify-between items-center border rounded p-3 ${p._failed ? 'border-red-400' : ''}">
       <div>
         <div class="font-medium">${esc(p.display_name)} ${p._pending ? '<span class="text-xs text-amber-700">(not synced)</span>' : ''}</div>
-        <div class="text-sm text-slate-500">${esc(p.age_group)} • ID: ${esc(p.participant_code || 'pending')} •
-          <span class="${p.check_in_status === 'arrived' ? 'text-green-600' : 'text-amber-600'}">${p.check_in_status.replace('_', ' ')}</span></div>
+        <div class="text-sm text-slate-500">${esc(p.age_group)} • ID: ${esc(p.participant_code || 'pending')}</div>
       </div>
       <div class="flex gap-2">
-        <button onclick="toggleCheckIn('${p.id}')" class="text-sm px-3 py-1 bg-slate-200 rounded">Toggle Check-in</button>
         <button onclick="printParticipantCardById('${p.id}')" class="text-sm px-3 py-1 bg-blue-100 rounded" ${p.participant_code ? '' : 'disabled'}>Print Card</button>
       </div>
     </div>`).join('') + (list.length > 300 ? `<p class="text-xs text-slate-500">Showing 300 of ${list.length}. Use the filter.</p>` : '')
     || '<p class="text-slate-500">No participants yet. Add a walk-up or import a CSV.</p>';
 }
-function setCheckIn(p, status) {
-  const patch = { check_in_status: status, checked_in_at: status === 'arrived' ? new Date().toISOString() : null };
-  enqueue({ kind: 'update', table: 'participants', id: p.id, patch });
-}
-function toggleCheckIn(id) { const p = S.participants.find(x => x.id === id); if (p) setCheckIn(p, p.check_in_status === 'arrived' ? 'not_arrived' : 'arrived'); }
-function checkInLookup() {
+function findParticipant() {
   const code = normCode(S.t?.year, $('checkNum').value);
-  if (!code) return msg('checkInResult', 'Enter a participant number', false);
+  if (!code) return msg('findResult', 'Enter a participant number', false);
   const p = S.participants.find(x => x.participant_code === code);
-  if (!p) return msg('checkInResult', 'Not found: ' + code, false);
-  if (p.check_in_status !== 'arrived') setCheckIn(p, 'arrived');
-  msg('checkInResult', `Checked in: ${p.display_name} (${p.age_group || ''})`);
-  $('checkNum').value = ''; $('checkNum').focus();
+  if (!p) return msg('findResult', 'Not found: ' + code, false);
+  msg('findResult', `Found: ${p.display_name} (${p.age_group || ''})`);
+  $('partFilter').value = code; renderParticipants();
+  $('checkNum').value = '';
+  printParticipantCard(p);
 }
 
 // ---------------------------------------------------------------- printing
@@ -689,16 +693,15 @@ function printParticipantCard(p) {
   }, 30);
 }
 function printWeighTicket(p, c) {
-  const w = Number(c.weight_oz), lbs = Math.floor(w / 16 + 1e-9);
   const sp = S.species.find(s => s.id === c.species_id)?.name || '';
   showPrintPreview(`<div class="print-ticket">
       <div class="font-bold text-xs">WEIGH TICKET</div>
       <div class="font-bold">${esc(p.display_name)}</div>
       <div class="font-mono text-xs">${esc(p.participant_code || '')}</div>
       <div>${esc(sp)}</div>
-      <div class="text-lg font-bold">${formatOz(w)}</div>
-      <div>${c.length_in ? esc(c.length_in) + '" • ' : ''}${new Date(c.weighed_at).toLocaleTimeString()}</div>
-      <div class="text-xs">Staff: ${esc(c.staff_initials || '—')} • ${esc(c.station || '')}</div>
+      <div class="text-lg font-bold">${formatLbs(c.weight_lbs)}</div>
+      <div>${new Date(c.weighed_at).toLocaleTimeString()}</div>
+      <div class="text-xs">${esc(c.station || '')}</div>
       <div class="font-mono text-[9px] mt-1">${c.id.slice(0, 8)}</div>
     </div>`);
 }
@@ -712,30 +715,27 @@ function lookupParticipant() {
   if (!p) return msg('weighMsg', 'Participant not found: ' + code, false);
   S.currentParticipant = p;
   $('weighForm').classList.remove('hidden');
-  $('pInfo').textContent = `${p.display_name} • ${p.age_group || ''} • ${code}` + (p.check_in_status !== 'arrived' ? ' • NOT CHECKED IN' : '');
+  $('pInfo').textContent = `${p.display_name} • ${p.age_group || ''} • ${code}`;
   $('weighMsg').textContent = '';
   populateSelects();
   $('scanNum').value = ''; $('weightLbs').focus();
 }
 function submitWeighIn() {
   const p = S.currentParticipant; if (!p) return;
-  const lbs = parseFloat($('weightLbs').value) || 0, oz = parseFloat($('weightOz').value) || 0;
-  if (oz >= 16) return msg('weighMsg', 'Ounces must be under 16', false);
-  const total = Math.round((lbs * 16 + oz) * 100) / 100;
-  if (total <= 0) return msg('weighMsg', 'Enter a weight', false);
+  const total = round2(parseFloat($('weightLbs').value));
+  if (!(total > 0)) return msg('weighMsg', 'Enter a weight in pounds (e.g. 2.35)', false);
+  if (total > 500) return msg('weighMsg', 'Weight must be 500 lbs or less', false);
   if (!$('species').value) return msg('weighMsg', 'No species set up for this tournament', false);
-  const len = parseFloat($('length').value);
   const row = {
-    id: uuid(), tournament_id: S.tid, participant_id: p.id, species_id: $('species').value, weight_oz: total,
-    length_in: len > 0 ? len : null, station: $('stationName').value.trim() || null,
-    staff_initials: $('initials').value.trim() || null, weighed_at: new Date().toISOString(), source: 'station', status: 'active'
+    id: uuid(), tournament_id: S.tid, participant_id: p.id, species_id: $('species').value, weight_lbs: total,
+    station: $('stationName').value.trim() || null, weighed_at: new Date().toISOString(), source: 'station', status: 'active'
   };
   enqueue({ kind: 'insert', table: 'catches', row: { ...row } });
   const local = S.catches.find(c => c.id === row.id); if (local) local.recorded_by = S.user?.id;
   printWeighTicket(p, row);
-  ['weightLbs', 'weightOz', 'length'].forEach(id => $(id).value = '');
+  $('weightLbs').value = '';
   $('weighForm').classList.add('hidden'); S.currentParticipant = null;
-  msg('weighMsg', `Recorded ${formatOz(total)} for ${p.display_name}`);
+  msg('weighMsg', `Recorded ${formatLbs(total)} for ${p.display_name}`);
   $('scanNum').focus();
 }
 function renderRecentCatches() {
@@ -745,7 +745,7 @@ function renderRecentCatches() {
   el.innerHTML = list.map(c => {
     const canVoid = c.status === 'active' && (hasRole('admin') || (hasRole('weigh') && (c.recorded_by === S.user?.id || c._pending)));
     return `<div class="flex justify-between items-center border-b py-1 ${c.status === 'voided' ? 'line-through text-slate-400' : ''}">
-      <span>${new Date(c.weighed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${esc(pById[c.participant_id]?.display_name || '?')} • ${esc(sById[c.species_id]?.name || '')} • <b>${formatOz(c.weight_oz)}</b>
+      <span>${new Date(c.weighed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${esc(pById[c.participant_id]?.display_name || '?')} • ${esc(sById[c.species_id]?.name || '')} • <b>${formatLbs(c.weight_lbs)}</b>
       ${c._pending ? '<span class="text-xs text-amber-700">(not synced)</span>' : ''} <span class="text-xs text-slate-400">${esc(c.station || '')}</span></span>
       ${canVoid ? `<button onclick="voidCatch('${c.id}')" class="text-xs text-red-700 border px-2 rounded">Void</button>` : ''}
     </div>`;
@@ -762,28 +762,26 @@ async function importTicketsCSV() {
   if (rows.length < 2) return msg('ticketMsg', 'CSV appears empty.', false);
   const h = rows[0].map(x => x.toLowerCase().replace(/[^a-z]/g, ''));
   const ix = { code: headerIndex(h, 'id', 'participantid', 'participant', 'code', 'number'), sp: headerIndex(h, 'species', 'fish'),
-    lbs: headerIndex(h, 'lbs', 'lb', 'pounds', 'weightlbs'), oz: headerIndex(h, 'oz', 'ounces'), woz: headerIndex(h, 'weightoz', 'totaloz'),
-    len: headerIndex(h, 'length', 'lengthin'), ini: headerIndex(h, 'initials', 'staff'), st: headerIndex(h, 'station'),
+    lbs: headerIndex(h, 'lbs', 'lb', 'pounds', 'weightlbs', 'weight'), st: headerIndex(h, 'station'),
     time: headerIndex(h, 'time', 'weighedat', 'timestamp'), ticket: headerIndex(h, 'ticket', 'ticketid') };
-  if (ix.code < 0 || ix.sp < 0 || (ix.lbs < 0 && ix.oz < 0 && ix.woz < 0)) return msg('ticketMsg', 'Need id, species and weight columns.', false);
+  if (ix.code < 0 || ix.sp < 0 || ix.lbs < 0) return msg('ticketMsg', 'Need id, species and lbs columns.', false);
   const byCode = Object.fromEntries(S.participants.map(p => [p.participant_code, p]));
   const bySp = Object.fromEntries(S.species.map(s => [s.name.toLowerCase(), s]));
   const known = new Set(S.catches.map(c => c.id));
   let added = 0; const errs = [];
   for (const [n, r] of rows.slice(1).entries()) {
     const p = byCode[normCode(S.t.year, r[ix.code])], sp = bySp[(r[ix.sp] || '').toLowerCase()];
-    const woz = ix.woz >= 0 && r[ix.woz] ? parseFloat(r[ix.woz]) : (parseFloat(r[ix.lbs]) || 0) * 16 + (parseFloat(r[ix.oz]) || 0);
+    const lbs = round2(parseFloat(r[ix.lbs]));
     if (!p) { errs.push(`row ${n + 2}: unknown participant`); continue; }
     if (!sp) { errs.push(`row ${n + 2}: unknown species`); continue; }
-    if (!(woz > 0)) { errs.push(`row ${n + 2}: bad weight`); continue; }
+    if (!(lbs > 0 && lbs <= 500)) { errs.push(`row ${n + 2}: bad weight`); continue; }
     let when = ix.time >= 0 && r[ix.time] ? new Date(r[ix.time]) : null;
     if (when && isNaN(when)) when = null;
     const ticket = ix.ticket >= 0 ? r[ix.ticket] : '';
-    const id = /^[0-9a-f-]{36}$/i.test(ticket) ? ticket : await hashUuid([S.tid, p.id, sp.id, woz, ticket || (when ? when.toISOString() : n)].join('|'));
+    const id = /^[0-9a-f-]{36}$/i.test(ticket) ? ticket : await hashUuid([S.tid, p.id, sp.id, lbs, ticket || (when ? when.toISOString() : n)].join('|'));
     if (known.has(id)) continue; known.add(id);
     enqueue({ kind: 'insert', table: 'catches', row: { id, tournament_id: S.tid, participant_id: p.id, species_id: sp.id,
-      weight_oz: Math.round(woz * 100) / 100, length_in: parseFloat(r[ix.len]) > 0 ? parseFloat(r[ix.len]) : null,
-      staff_initials: ix.ini >= 0 ? (r[ix.ini] || '').slice(0, 10) || null : null, station: ix.st >= 0 ? r[ix.st] || null : 'Import',
+      weight_lbs: lbs, station: ix.st >= 0 ? r[ix.st] || null : 'Import',
       weighed_at: (when || new Date()).toISOString(), source: 'import', status: 'active' } });
     added++;
   }
@@ -802,13 +800,13 @@ function computeBoards() {
     for (const c of active) {
       if (speciesId && c.species_id !== speciesId) continue;
       const a = agg[c.participant_id] || (agg[c.participant_id] = { fish: 0, sum: 0, max: 0 });
-      const w = Number(c.weight_oz); a.fish++; a.sum += w; a.max = Math.max(a.max, w);
+      const w = Number(c.weight_lbs); a.fish++; a.sum += w; a.max = Math.max(a.max, w);
     }
-    const list = Object.entries(agg).map(([pid, a]) => ({ p: pById[pid], fish: a.fish, oz: Math.round((scoring === 'biggest_fish' ? a.max : a.sum) * 100) / 100 }))
+    const list = Object.entries(agg).map(([pid, a]) => ({ p: pById[pid], fish: a.fish, lbs: round2(scoring === 'biggest_fish' ? a.max : a.sum) }))
       .filter(x => x.p && (!ageGroup || x.p.age_group === ageGroup))
-      .sort((a, b) => b.oz - a.oz || a.p.display_name.localeCompare(b.p.display_name));
+      .sort((a, b) => b.lbs - a.lbs || a.p.display_name.localeCompare(b.p.display_name));
     let rank = 0;
-    return list.slice(0, topN).map((x, i) => { if (i === 0 || x.oz !== list[i - 1].oz) rank = i + 1; return { rank, name: x.p.display_name, group: x.p.age_group, fish: x.fish, oz: x.oz }; });
+    return list.slice(0, topN).map((x, i) => { if (i === 0 || x.lbs !== list[i - 1].lbs) rank = i + 1; return { rank, name: x.p.display_name, group: x.p.age_group, fish: x.fish, lbs: x.lbs }; });
   };
   const boards = [];
   for (const c of S.configs.filter(c => c.enabled).sort((a, b) => a.sort_order - b.sort_order)) {
@@ -818,19 +816,32 @@ function computeBoards() {
   }
   return { tournament: { id: S.t.id, name: S.t.name, year: S.t.year, status: S.t.status }, boards, local: true };
 }
+// Selected leaderboard tab lives in the URL hash (#board=<slug>) so it can be shared.
+function currentBoardSlug() { const m = location.hash.match(/board=([^&]+)/); return m ? decodeURIComponent(m[1]) : null; }
+function selectBoard(slugName) { history.replaceState(null, '', location.pathname + location.search + '#board=' + encodeURIComponent(slugName)); renderLeaderboard(); }
+window.addEventListener('hashchange', () => { if (S.tab === 'leaderboard') renderLeaderboard(); });
 function currentBoards() { return canReadData() && S.t ? computeBoards() : S.board.data; }
 
 function renderLeaderboard() {
   const data = currentBoards();
   $('boardHeading').textContent = data?.tournament ? `${data.tournament.name} – Leaderboard` : 'Leaderboard';
   $('boardUpdated').textContent = data?.local ? 'Live (this station)' : (S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() + ` • refreshes every ${CFG.publicPollSeconds}s` : '');
+  if (!data || data.error) $('boardTabs').innerHTML = '';
   if (!data) { $('boardContent').innerHTML = `<p class="text-slate-500">${S.tid ? 'Loading…' : 'No public tournament yet.'}</p>`; return; }
   if (data.error) { $('boardContent').innerHTML = '<p class="text-slate-500">This tournament is not public.</p>'; return; }
-  $('boardContent').innerHTML = data.boards.map(b => `
-    <div class="border rounded-lg p-4">
-      <h3 class="font-semibold mb-2">${esc(b.title)} <span class="text-xs font-normal text-slate-500">${b.scoring === 'biggest_fish' ? 'biggest fish' : 'total weight'}</span></h3>
-      ${b.rows.map(r => `<div class="flex justify-between py-1 border-b text-sm"><span>${r.rank}. ${esc(r.name)} <span class="text-slate-400">${esc(r.group || '')}</span></span><span class="font-bold">${formatOz(r.oz)}</span></div>`).join('') || '<div class="text-sm text-slate-500">No fish yet</div>'}
-    </div>`).join('') || '<p class="text-slate-500">No leaderboards configured.</p>';
+  const boards = data.boards || [];
+  if (!boards.length) { $('boardTabs').innerHTML = ''; $('boardContent').innerHTML = '<p class="text-slate-500">No leaderboards configured.</p>'; return; }
+  const slugs = []; boards.forEach((b, i) => { let k = slug(b.title) || 'board'; if (slugs.includes(k)) k += '-' + i; slugs.push(k); });
+  let idx = slugs.indexOf(currentBoardSlug());
+  if (idx < 0) idx = 0;
+  $('boardTabs').innerHTML = boards.map((b, i) => `<button role="tab" aria-selected="${i === idx}" onclick="selectBoard('${slugs[i]}')"
+      class="px-3 py-2 rounded-full text-sm ${i === idx ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">${esc(b.title)}</button>`).join('');
+  const b = boards[idx];
+  $('boardContent').innerHTML = `
+    <div class="text-xs text-slate-500 mb-2">${b.scoring === 'biggest_fish' ? 'Biggest single fish' : 'Total weight'}</div>
+    ${b.rows.map(r => `<div class="flex justify-between gap-3 py-2 border-b"><span class="min-w-0"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)} <span class="text-slate-400 text-sm">${esc(r.group || '')}</span></span><span class="font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('') || '<div class="text-sm text-slate-500">No fish yet</div>'}`;
+  const active = $('boardTabs').children[idx];
+  if (active && S.lastBoardIdx !== idx) { const c = $('boardTabs'); c.scrollLeft = active.offsetLeft - (c.clientWidth - active.offsetWidth) / 2; S.lastBoardIdx = idx; }
 }
 
 // Public / big-screen polling: one small RPC, skipped payload when nothing changed.
@@ -872,7 +883,7 @@ function renderDisplay() {
   if (!list.length) { $('displayTitle').textContent = 'LIVE LEADERBOARD'; $('displayBoard').innerHTML = `<p class="text-center text-slate-400">${data ? 'No weigh-ins yet.' : 'Loading…'}</p>`; return; }
   const b = list[S.displayIdx % list.length];
   $('displayTitle').textContent = b.title.toUpperCase();
-  $('displayBoard').innerHTML = b.rows.map(r => `<div class="flex justify-between border-b border-slate-700 py-2"><span>${r.rank}. ${esc(r.name)} <span class="text-slate-400 text-xl">${esc(r.group || '')}</span></span><span class="font-bold">${formatOz(r.oz)}</span></div>`).join('') || '<p class="text-center text-slate-400">No fish yet</p>';
+  $('displayBoard').innerHTML = b.rows.map(r => `<div class="flex justify-between border-b border-slate-700 py-2"><span>${r.rank}. ${esc(r.name)} <span class="text-slate-400 text-xl">${esc(r.group || '')}</span></span><span class="font-bold">${formatLbs(r.lbs)}</span></div>`).join('') || '<p class="text-center text-slate-400">No fish yet</p>';
   $('displayUpdated').textContent = S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() : '';
 }
 

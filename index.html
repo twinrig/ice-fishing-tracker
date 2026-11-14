@@ -29,6 +29,8 @@
     #printArea { position: absolute; left: 0; top: 0; }
     #printArea .print-card, #printArea .print-ticket { border: none; }
   }
+  .board-tabs { scrollbar-width: thin; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+  .board-tabs button { scroll-snap-align: start; flex: 0 0 auto; }
   body.screen-mode header, body.screen-mode #mainNav, body.screen-mode #connBar { display: none !important; }
   body.screen-mode .app-wrap { max-width: none; padding: 0; }
   body.screen-mode #tab-display > div { border-radius: 0; min-height: 100vh; }
@@ -125,22 +127,22 @@
     </div>
   </section>
 
-  <!-- PARTICIPANTS / CHECK-IN (gate) -->
+  <!-- PARTICIPANTS (gate) -->
   <section id="tab-participants" class="tab hidden">
     <div class="bg-white rounded-xl shadow p-6">
       <div class="flex justify-between items-center mb-4">
-        <h2 class="text-xl font-semibold">Participants <span class="text-sm font-normal text-slate-500">(Check-in)</span></h2>
+        <h2 class="text-xl font-semibold">Participants</h2>
         <button onclick="openWalkup()" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm">+ Walk-up</button>
       </div>
       <div class="mb-4 p-4 bg-slate-50 rounded-lg">
-        <label class="block text-sm font-medium mb-2">Scan or type to Check In</label>
+        <label class="block text-sm font-medium mb-2">Scan or type a number to find a participant and reprint their badge</label>
         <div class="flex items-center gap-1">
           <input id="checkYear" class="w-20 border rounded px-3 py-2 text-lg bg-slate-50" readonly>
           <span class="text-xl font-mono">_</span>
-          <input id="checkNum" class="flex-1 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" onkeydown="if(event.key==='Enter') checkInLookup()">
-          <button onclick="checkInLookup()" class="bg-blue-600 text-white px-4 py-2 rounded">Check In</button>
+          <input id="checkNum" class="flex-1 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" onkeydown="if(event.key==='Enter') findParticipant()">
+          <button onclick="findParticipant()" class="bg-blue-600 text-white px-4 py-2 rounded">Find</button>
         </div>
-        <div id="checkInResult" class="mt-2 text-sm"></div>
+        <div id="findResult" class="mt-2 text-sm"></div>
         <div id="codePoolInfo" class="mt-1 text-xs text-slate-500"></div>
       </div>
       <div class="flex justify-between items-center mb-2 gap-2">
@@ -169,18 +171,14 @@
         <div id="weighForm" class="hidden space-y-3">
           <div id="pInfo" class="bg-slate-50 p-3 rounded font-medium"></div>
           <select id="species" class="w-full border rounded px-3 py-2"></select>
-          <div class="flex gap-2">
-            <input id="weightLbs" type="number" min="0" step="1" placeholder="Lbs" class="w-1/2 border rounded px-3 py-2">
-            <input id="weightOz" type="number" min="0" max="15.99" step="0.1" placeholder="Oz" class="w-1/2 border rounded px-3 py-2">
-          </div>
-          <input id="length" type="number" step="0.1" placeholder="Length (in)" class="w-full border rounded px-3 py-2">
-          <input id="initials" placeholder="Staff Initials" maxlength="10" class="w-full border rounded px-3 py-2">
+          <label class="block text-sm font-medium">Weight (lbs, decimals OK)</label>
+          <input id="weightLbs" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" placeholder="e.g. 2.35" class="w-full border rounded px-3 py-2 text-lg" onkeydown="if(event.key==='Enter') submitWeighIn()">
           <button onclick="submitWeighIn()" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold">Submit & Print Ticket</button>
         </div>
         <div id="weighMsg" class="mt-2 text-sm"></div>
         <hr class="my-5">
         <h3 class="font-semibold mb-2 text-sm">Import digital weigh tickets (CSV)</h3>
-        <p class="text-xs text-slate-600 mb-2">Columns: <code>id</code> (yyyy_#####), <code>species</code>, <code>lbs</code>, <code>oz</code> (or <code>weight_oz</code>), optional <code>length</code>, <code>initials</code>, <code>station</code>, <code>time</code>, <code>ticket</code>. Safe to re-import.</p>
+        <p class="text-xs text-slate-600 mb-2">Columns: <code>id</code> (yyyy_#####), <code>species</code>, <code>lbs</code> (decimal pounds, e.g. 2.35), optional <code>station</code>, <code>time</code>, <code>ticket</code>. Safe to re-import.</p>
         <input type="file" id="ticketFile" accept=".csv,text/csv" class="text-sm mb-2">
         <button onclick="importTicketsCSV()" class="bg-green-600 text-white px-4 py-1 rounded text-sm">Import tickets</button>
         <div id="ticketMsg" class="mt-2 text-sm"></div>
@@ -194,12 +192,13 @@
 
   <!-- LEADERBOARD -->
   <section id="tab-leaderboard" class="tab hidden">
-    <div class="bg-white rounded-xl shadow p-6">
-      <div class="flex justify-between items-center mb-3">
+    <div class="bg-white rounded-xl shadow p-4 md:p-6">
+      <div class="flex flex-wrap gap-1 justify-between items-center mb-3">
         <h2 class="text-xl font-semibold" id="boardHeading">Leaderboard</h2>
         <span id="boardUpdated" class="text-xs text-slate-500"></span>
       </div>
-      <div id="boardContent" class="grid md:grid-cols-2 gap-4"></div>
+      <div id="boardTabs" role="tablist" class="board-tabs relative flex gap-2 overflow-x-auto whitespace-nowrap -mx-2 px-2 pb-2 mb-3 border-b"></div>
+      <div id="boardContent"></div>
     </div>
   </section>
 

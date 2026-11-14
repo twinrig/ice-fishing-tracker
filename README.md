@@ -19,10 +19,10 @@ Several gate laptops, weigh stations, an admin laptop and a big-screen TV share 
 | Role | Can do |
 | --- | --- |
 | `admin` | Everything: tournaments, species, leaderboards, imports, exports, corrections |
-| `gate` | Add/import walk-ups, check people in, print badge cards |
+| `gate` | Register walk-ups, import participants, find people and print badge cards |
 | `weigh` | Record weigh-ins, void their own mistakes, import digital weigh tickets |
 | `screen` | Read-only staff view (big screen / leaderboard) |
-| public (not signed in) | Leaderboard only: names, age group, placements, weights. No emails/phones. |
+| public (not signed in) | Leaderboard only: names, age group, placements, weights (lbs). No emails/phones. |
 
 A signed-in account with no role in `staff_roles` can see nothing.
 
@@ -43,6 +43,10 @@ Things to know:
 - If a change is rejected by the server (for example, no permission), it shows as "failed" in the sync
   queue, where you can retry or discard it.
 - Reserved but unused badge numbers leave gaps in the numbering. That's harmless.
+
+**Public leaderboard on phones.** Each leaderboard (overall, big fish, each species, each age group…) is its own tab;
+the tab row scrolls sideways on small screens. The selected tab is kept in the link (for example
+`…/?t=<tournament id>#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
 
 **Big screen URL (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&screen=1`.
 The admin Setup tab shows the exact links for the selected tournament.
@@ -98,10 +102,12 @@ To remove someone completely, delete their user in Authentication → Users (the
 ## CSV formats
 
 - **Participants (Setup → Import):** `name, ageGroup` + optional `email, phone, id`. Re-importing the same file skips rows already imported.
-- **Digital weigh tickets (Weigh-in tab):** `id` (yyyy_#####), `species`, `lbs`, `oz` (or `weight_oz`), optional `length, initials, station, time, ticket`.
+- **Digital weigh tickets (Weigh-in tab):** `id` (yyyy_#####), `species`, `lbs` (decimal pounds, e.g. `2.35`), optional `station, time, ticket`.
 - **Exports (Setup):** participants, weigh-ins, leaderboard.
 
-Weights are stored as total ounces (`lbs * 16 + oz`).
+Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, must be > 0 and ≤ 500).
+There is no angler check-in step, no fish length and no staff initials. Each weigh-in automatically records the
+signed-in staff account (`recorded_by`) and the station name set on that laptop.
 
 ## Backups
 
