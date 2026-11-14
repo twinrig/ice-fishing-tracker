@@ -36,21 +36,26 @@ const S = {
 };
 const params = new URLSearchParams(location.search); // as loaded; use urlParam() for the live URL
 const SCREEN_MODE = params.get('screen') === '1';
+// Public leaderboard page (leaderboard only, no staff app): ?t=<id>&view=leaderboard, plus older shared links
+// (?t=<id> on its own, or a #board=… hash). The full staff app keeps its screen in ?tab= instead.
+const BOARD_MODE = !SCREEN_MODE && !params.has('tab') && (params.get('view') === 'leaderboard'
+  || (params.has('t') && !params.has('view')) || (!params.has('view') && /(^#|&)board=/.test(location.hash)));
+const KIOSK = SCREEN_MODE || BOARD_MODE; // read-only public pages: never load staff data or show staff controls
 const TAB_NAMES = ['setup', 'participants', 'weighin', 'leaderboard', 'display'];
 function urlParam(k) { return new URLSearchParams(location.search).get(k); }
-// The tab a shared link asks for: ?view=leaderboard (or a #board=… hash, which only exists on the leaderboard).
+// The staff-app screen named in the URL (?tab=…; older full-app URLs used ?view=…).
 function linkedView() {
-  const v = urlParam('view');
+  const v = urlParam('tab') || urlParam('view');
   if (TAB_NAMES.includes(v)) return v;
-  // #board=… only exists on the leaderboard, and older shared public links were just ?t=<id>.
-  return /(^#|&)board=/.test(location.hash) || urlParam('t') ? 'leaderboard' : null;
+  return /(^#|&)board=/.test(location.hash) ? 'leaderboard' : null;
 }
-// Keep ?t= and ?view= in the address bar in step with the app, so reloads and copied links land on the same screen.
+// Keep the tournament and screen in the address bar, so reloads and copied links land on the same screen.
 function syncUrl() {
   const q = new URLSearchParams(location.search);
   if (S.tid) q.set('t', S.tid);
-  if (S.tab && !SCREEN_MODE) q.set('view', S.tab);
-  const hash = S.tab === 'leaderboard' || SCREEN_MODE ? location.hash : '';
+  if (BOARD_MODE) q.set('view', 'leaderboard');
+  else if (S.tab && !SCREEN_MODE) { q.delete('view'); q.set('tab', S.tab); }
+  const hash = S.tab === 'leaderboard' || KIOSK ? location.hash : '';
   const url = location.pathname + (q.toString() ? '?' + q.toString() : '') + hash;
   if (url !== location.pathname + location.search + location.hash) history.replaceState(null, '', url);
 }
@@ -252,18 +257,18 @@ async function signOut() {
 }
 async function onSession(session) {
   S.session = session; S.user = session?.user || null;
-  if (S.user) {
+  if (S.user && !KIOSK) {
     const { data, error } = await sb.from('staff_roles').select('role, display_name').eq('user_id', S.user.id);
     if (!error) { S.roles = data.map(r => r.role); LS.set('ift.roles.' + S.user.id, S.roles); }
     else S.roles = LS.get('ift.roles.' + S.user.id, []);
   } else S.roles = [];
   renderAuth();
   await loadTournamentList();
-  if (S.session) flushQueue();
+  if (S.session && !KIOSK) flushQueue();
 }
 function renderAuth() {
   const signedIn = !!S.user;
-  $('signInBtn').classList.toggle('hidden', signedIn || SCREEN_MODE);
+  $('signInBtn').classList.toggle('hidden', signedIn || KIOSK);
   $('signOutBtn').classList.toggle('hidden', !signedIn);
   $('userBadge').textContent = signedIn ? S.user.email + (S.roles.length ? '' : ' (no staff role yet)') : '';
   const rs = $('roleSelect');
@@ -287,6 +292,7 @@ function applyRole(role, silent, wantTab) {
   const allowed = ROLE_TABS[S.role] || ROLE_TABS.public;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('hidden', !allowed.includes(b.dataset.tab)));
   if (SCREEN_MODE) return showTab('display');
+  if (BOARD_MODE) return showTab('leaderboard');
   showTab(allowed.includes(wantTab) ? wantTab : allowed[0]);
 }
 
@@ -316,7 +322,7 @@ async function loadTournamentList() {
 async function selectTournament(tid) {
   S.tid = tid || null;
   $('tournamentSelect').value = S.tid || '';
-  if (S.tid) LS.set('ift.tid', S.tid);
+  if (S.tid && !KIOSK) LS.set('ift.tid', S.tid); // a public link shouldn't change this laptop's remembered tournament
   syncUrl();
   S.board = { data: null, version: null, tid: S.tid, timer: S.board.timer, at: null, gen: S.board.gen };
   S.t = null; S.species = []; S.configs = []; S.participants = []; S.catches = [];
@@ -1046,6 +1052,7 @@ window.addEventListener('hashchange', () => {
 });
 window.addEventListener('popstate', () => {
   const t = urlParam('t'); if (t && t !== S.tid && S.tournaments.some(x => x.id === t)) selectTournament(t);
+  if (KIOSK) return;
   const v = linkedView(); if (v && v !== S.tab && (ROLE_TABS[S.role] || ROLE_TABS.public).includes(v)) showTab(v);
 });
 function currentBoards() { return canReadData() && S.t ? computeBoards() : S.board.data; }
@@ -1053,6 +1060,7 @@ function currentBoards() { return canReadData() && S.t ? computeBoards() : S.boa
 function renderLeaderboard() {
   const data = currentBoards();
   $('boardHeading').textContent = data?.tournament ? `${data.tournament.name} – Leaderboard` : 'Leaderboard';
+  if (BOARD_MODE && data?.tournament) document.title = `${data.tournament.name} – Leaderboard`;
   $('boardUpdated').textContent = data?.local ? 'Live (this station)' : (S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() + ` • refreshes every ${CFG.publicPollSeconds}s` : '');
   if (!data || data.error) $('boardTabs').innerHTML = '';
   if (!data) { $('boardContent').innerHTML = `<p class="text-slate-500">${S.tid ? 'Loading…' : 'No public tournament yet.'}</p>`; return; }
@@ -1153,6 +1161,7 @@ function renderDisplay() {
 // ---------------------------------------------------------------- startup
 document.addEventListener('DOMContentLoaded', async () => {
   if (SCREEN_MODE) document.body.classList.add('screen-mode');
+  if (BOARD_MODE) { document.body.classList.add('board-mode'); document.title = 'Leaderboard'; }
   $('stationName').value = LS.get('ift.station', '') || '';
   renderConn();
   const { data } = await sb.auth.getSession();

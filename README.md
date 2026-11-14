@@ -44,14 +44,18 @@ Things to know:
   queue, where you can retry or discard it.
 - Reserved but unused badge numbers leave gaps in the numbering. That's harmless.
 
-**Public leaderboard on phones.** Each leaderboard (overall, big fish, each species, each Age/Division…) is its own tab;
-the tab row scrolls sideways on small screens. The selected tab is kept in the link (for example
-`…/?t=<tournament id>&view=leaderboard#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
-The address bar always holds the current tournament (`t=`) and screen (`view=`), so reloads and copied links open the same
-screen – even for signed-in staff. Older `?t=<id>` links open the leaderboard too. Switching mode (Admin / Gate / Weigh /
-Big Screen) jumps to that mode's main screen; the tournament picker at the top applies to every screen and is remembered.
+**Public leaderboard link (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&view=leaderboard`.
+It opens a leaderboard-only page (tournament name, last-updated time, the board tabs) with no staff tabs, mode picker,
+tournament picker or sign-in button – even on a signed-in staff laptop. Each leaderboard (overall, big fish, each species,
+each Age/Division…) is its own tab; the tab row scrolls sideways on small screens and the selected tab is kept in the link
+(`…&view=leaderboard#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
+Older links (`?t=<id>` on its own, or with only `#board=…`) open the same page.
 
 **Big screen URL (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&screen=1`.
+
+**Staff** use the plain address `https://twinrig.github.io/ice-fishing-tracker/`. The full app keeps the current
+tournament and screen in the address (`?t=…&tab=…`), so reloads stay put. Switching mode (Admin / Gate / Weigh /
+Big Screen) jumps to that mode's main screen; the tournament picker at the top applies to every screen and is remembered.
 The admin Setup tab shows the exact links for the selected tournament.
 
 ## One-time setup (admin)
