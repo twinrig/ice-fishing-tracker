@@ -115,13 +115,26 @@
 
     <div class="bg-white rounded-xl shadow p-6">
       <h3 class="font-semibold mb-2">Import Participants (pre-registrations or walk-ups)</h3>
-      <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, optional <code>age</code>, <code>Age/Division</code>, <code>email</code>, <code>phone</code>, <code>id</code> (yyyy_#####). With an <code>age</code>, the Age/Division is assigned automatically from the ranges; without one, the file's Age/Division is used as a manual choice. Numbers are assigned automatically when <code>id</code> is blank. Re-importing the same file won't create duplicates.</p>
+      <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, optional <code>age</code> and/or a birth date (<code>birthdate</code>, <code>birth_date</code>, <code>dob</code>, <code>date_of_birth</code>, <code>birthday</code>; formats 2014-03-09, 3/9/2014, 03/09/2014, 3/9/14), <code>Age/Division</code>, <code>email</code>, <code>phone</code>, <code>id</code> (yyyy_#####). Ages are worked out as of the tournament's event date; a birth date wins over an age. With an age, the Age/Division is assigned automatically; without one, the file's Age/Division is used as a hand-set choice. Numbers are assigned automatically when <code>id</code> is blank. Re-importing the same file won't create duplicates.</p>
       <div class="flex flex-wrap gap-2 items-center">
         <input type="file" id="csvFile" accept=".csv,text/csv" class="text-sm">
         <select id="csvSource" class="border rounded px-2 py-1 text-sm"><option value="preregistered">Pre-registered</option><option value="walkup">Walk-ups</option></select>
-        <button onclick="importParticipantsCSV()" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm">Import CSV</button>
+        <button onclick="previewParticipantsCSV()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">Preview</button>
       </div>
       <div id="importMsg" class="mt-3 text-sm"></div>
+      <div id="importPreview" class="mt-3 hidden">
+        <div id="importSummary" class="text-sm mb-2"></div>
+        <div class="max-h-[60vh] overflow-auto border rounded">
+          <table class="w-full text-xs"><thead class="bg-slate-100 sticky top-0"><tr>
+            <th class="text-left p-1">#</th><th class="text-left p-1">Name</th><th class="text-left p-1">Age (file)</th><th class="text-left p-1">Birth date (file)</th>
+            <th class="text-left p-1">Age used</th><th class="text-left p-1">Age/Division</th><th class="text-left p-1">Notes</th></tr></thead>
+            <tbody id="importRows"></tbody></table>
+        </div>
+        <div class="flex gap-2 mt-2">
+          <button id="importGo" onclick="importParticipantsCSV()" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm">Import</button>
+          <button onclick="cancelImport()" class="border px-4 py-2 rounded-lg text-sm">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <div class="bg-white rounded-xl shadow p-6">
@@ -239,6 +252,8 @@
       <input id="wYears" type="number" inputmode="numeric" min="0" max="120" step="1" placeholder="Age" oninput="updateDivisionPreview()" class="w-24 border rounded px-3 py-2">
       <select id="wAge" onchange="updateDivisionPreview()" class="flex-1 border rounded px-3 py-2" title="Age/Division"></select>
     </div>
+    <label class="block text-xs text-slate-600 mb-1">Birth date (optional – fills in the age as of the tournament date)</label>
+    <input id="wBirth" type="date" oninput="birthChanged()" class="w-full border rounded px-3 py-2 mb-1">
     <div id="wDivPreview" class="text-xs mb-3"></div>
     <input id="wEmail" placeholder="Email (optional)" class="w-full border rounded px-3 py-2 mb-3">
     <input id="wPhone" placeholder="Phone (optional)" class="w-full border rounded px-3 py-2 mb-4">

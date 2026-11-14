@@ -107,7 +107,9 @@ To remove someone completely, delete their user in Authentication → Users (the
 
 ## Ages and Age/Division
 
-- Each participant has an **age** (whole years), entered on walk-up/edit or imported from CSV.
+- Each participant has an **age** (whole years), entered on walk-up/edit or imported from CSV, and an optional
+  **birth date**. When a birth date is stored, the age is calculated as of the tournament's **event date**
+  (today if no event date is set) and recalculated automatically if the event date changes.
 - In **Setup**, each Age/Division has a **Min** and **Max** age. Leave one blank for open-ended
   (Max 13 = "13 & under", Min 19 = "19 and up"). If ranges overlap, the first one listed wins.
 - The database assigns the Age/Division automatically on every add, import and age edit, and re-assigns
@@ -120,14 +122,26 @@ To remove someone completely, delete their user in Authentication → Users (the
 
 ## CSV formats
 
-- **Participants (Setup → Import):** `name` + optional `age`, `Age/Division`, `email`, `phone`, `id`.
-  With an `age`, the Age/Division is assigned automatically from the ranges (the file's Age/Division is ignored).
+- **Participants (Setup → Import → Preview → Import):** `name` + optional `age` and/or birth date, `Age/Division`, `email`, `phone`, `id`.
+  - Birth date headers (any case): `birthdate`, `birth_date`, `dob`, `date_of_birth`, `birthday`.
+  - Date formats: `2014-03-09`, `2014/3/9`, `3/9/2014`, `03/09/2014`, `3/9/14` (US month/day order).
+    Two-digit years use the most recent century that isn't after the event date (`1/1/30` = 1930, `3/9/14` = 2014).
+  - If both an age and a birth date are given, the birth date wins and the preview flags any disagreement.
+    A date that can't be read leaves the age blank (or falls back to the age column) and is flagged in the preview.
+  - Nothing is saved until you click **Import** under the preview.
+  With an age, the Age/Division is assigned automatically from the ranges (the file's Age/Division is ignored).
   Without an age, the file's Age/Division (if any) is kept as a hand-set choice. Re-importing the same file skips rows already imported.
-- **Exports (Setup):** participants (including `age`, `Age/Division`, `division_set_by_hand`), weigh-ins, leaderboard.
+- **Exports (Setup):** participants (including `age`, `birth_date`, `Age/Division`, `division_set_by_hand`), weigh-ins, leaderboard.
 
 Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, must be > 0 and ≤ 500).
 There is no angler check-in step, no fish length and no staff initials. Each weigh-in automatically records the
 signed-in staff account (`recorded_by`) and the station name set on that laptop.
+
+## Sample file
+
+`samples/test-anglers.csv` – 40 fake anglers mixing age only, birth date only (mixed formats), both
+(some disagreeing), neither, and bad dates, including the 13/14 and 18/19 boundaries for a 2027-01-23 event.
+Import it into a separate **test tournament**, not a real one (two rows carry fixed ids 2027_00101/00102).
 
 ## Backups
 

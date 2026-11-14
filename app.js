@@ -618,49 +618,121 @@ function readFile(input) {
   return new Promise((res, rej) => { const f = input.files[0]; if (!f) return rej(new Error('Please select a CSV file.')); const r = new FileReader(); r.onload = e => res(e.target.result); r.onerror = rej; r.readAsText(f); });
 }
 
-async function importParticipantsCSV() {
-  if (!S.t) return msg('importMsg', 'Save the tournament first.', false);
-  let text; try { text = await readFile($('csvFile')); } catch (e) { return msg('importMsg', e.message, false); }
+// ---- birth dates / ages
+// "As of" date for ages: the tournament's event date, else today (local).
+function asOfDate(t) {
+  if (t?.event_date) return t.event_date;
+  const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function ageOn(birth, asOf) { // both 'YYYY-MM-DD'
+  if (!birth || birth > asOf) return null;
+  const [by, bm, bd] = birth.split('-').map(Number), [ay, am, ad] = asOf.split('-').map(Number);
+  return ay - by - ((am < bm || (am === bm && ad < bd)) ? 1 : 0);
+}
+// Accepts YYYY-MM-DD (or / .), M/D/YYYY, MM/DD/YYYY, M/D/YY (US month-first). Returns {date} or {error}.
+function parseBirthDate(raw, asOf) {
+  const s = String(raw ?? '').trim(); if (!s) return { date: null };
+  let y, m, d, k;
+  if ((k = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) [y, m, d] = [+k[1], +k[2], +k[3]];
+  else if ((k = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})$/))) {
+    [m, d, y] = [+k[1], +k[2], +k[3]];
+    if (k[3].length === 2) { // 2-digit year: newest century that doesn't put the birthday after the tournament date
+      y += 2000;
+      const iso = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      if (iso > asOf) y -= 100;
+    }
+  } else return { error: `"${s}" isn't a date format I recognize (use YYYY-MM-DD or M/D/YYYY)` };
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (m < 1 || m > 12 || dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return { error: `"${s}" isn't a real date` };
+  const date = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  if (date > asOf) return { error: `birth date ${s} is after the tournament date` };
+  if (ageOn(date, asOf) > 120) return { error: `birth date ${s} gives an age over 120` };
+  return { date };
+}
+
+// Build an import plan (no network) so the admin sees ages, divisions and warnings before importing.
+async function buildImportPlan(text, t, existing) {
   const rows = parseCSV(text);
-  if (rows.length < 2) return msg('importMsg', 'CSV appears empty or missing header.', false);
+  if (rows.length < 2) return { error: 'CSV appears empty or missing header.' };
   const h = rows[0].map(x => x.toLowerCase().replace(/[^a-z]/g, ''));
-  const ni = h.findIndex(x => x.includes('name')), yi = headerIndex(h, 'age', 'ageyears', 'years');
+  const bi = headerIndex(h, 'birthdate', 'dob', 'dateofbirth', 'birthday', 'bday', 'born');
+  const ni = h.findIndex((x, i) => x.includes('name') && i !== bi), yi = headerIndex(h, 'age', 'ageyears', 'years');
   const ai = h.findIndex(x => x.includes('division') || x.includes('group'));
   const ei = headerIndex(h, 'email', 'emailaddress'), pi = headerIndex(h, 'phone', 'phonenumber', 'cell');
   const ci = headerIndex(h, 'id', 'code', 'participantid', 'participantcode', 'number');
-  if (ni === -1) return msg('importMsg', 'CSV must have a "name" column.', false);
-  const source = $('csvSource').value;
-  const existingIds = new Set(S.participants.map(p => p.id));
-  const out = [];
-  for (const r of rows.slice(1)) {
-    const name = r[ni]; if (!name) continue;
-    const code = ci >= 0 && r[ci] ? normCode(S.t.year, r[ci]) : null;
-    const email = ei >= 0 ? r[ei] || null : null, phone = pi >= 0 ? r[pi] || null : null;
-    const id = await hashUuid([S.tid, name.toLowerCase(), (email || '').toLowerCase(), phone || '', code || ''].join('|'));
-    if (existingIds.has(id)) continue;
-    existingIds.add(id);
-    const age = yi >= 0 && /^\d{1,3}$/.test(r[yi] || '') ? parseInt(r[yi], 10) : null;
+  if (ni === -1) return { error: 'CSV must have a "name" column.' };
+  const asOf = asOfDate(t), seen = new Set(existing), plan = [];
+  for (const [n, r] of rows.slice(1).entries()) {
+    const name = (r[ni] || '').trim();
+    const item = { line: n + 2, name, warnings: [], status: 'new' };
+    plan.push(item);
+    if (!name) { item.status = 'skip'; item.warnings.push('no name – skipped'); continue; }
+    item.code = ci >= 0 && r[ci] ? normCode(t.year, r[ci]) : null;
+    item.email = ei >= 0 ? r[ei] || null : null; item.phone = pi >= 0 ? r[pi] || null : null;
+    item.id = await hashUuid([t.id, name.toLowerCase(), (item.email || '').toLowerCase(), item.phone || '', item.code || ''].join('|'));
+    if (seen.has(item.id)) { item.status = 'already'; item.warnings.push('already imported – skipped'); continue; }
+    seen.add(item.id);
+    item.ageRaw = yi >= 0 ? (r[yi] || '').trim() : '';
+    item.birthRaw = bi >= 0 ? (r[bi] || '').trim() : '';
+    const fileAge = /^\d{1,3}$/.test(item.ageRaw) && +item.ageRaw <= 120 ? +item.ageRaw : null;
+    if (item.ageRaw && fileAge == null) item.warnings.push(`age "${item.ageRaw}" isn't a whole number 0–120 – ignored`);
+    const b = parseBirthDate(item.birthRaw, asOf);
+    if (b.error) item.warnings.push(b.error + (fileAge != null ? ' – using the age column' : ' – age left blank'));
+    item.birth = b.date || null;
+    const birthAge = item.birth ? ageOn(item.birth, asOf) : null;
+    if (birthAge != null && fileAge != null && birthAge !== fileAge) item.warnings.push(`age column says ${fileAge}, birth date gives ${birthAge} on ${asOf} – using birth date`);
+    item.age = birthAge ?? fileAge;
     const fileDiv = ai >= 0 ? (r[ai] || null) : null;
-    const manual = age == null && !!fileDiv; // no age: use the file's Age/Division as a manual choice
-    out.push({ id, tournament_id: S.tid, display_name: name, age, age_group: manual ? fileDiv : divisionForAge(S.t, age),
-      age_group_override: manual, email, phone, participant_code: code, source });
+    item.manual = item.age == null && !!fileDiv;
+    item.division = item.manual ? fileDiv : divisionForAge(t, item.age);
+    if (item.age == null && !item.birthRaw && !item.ageRaw) item.warnings.push(fileDiv ? `no age or birth date – using "${fileDiv}" from the file (set by hand)` : 'no age or birth date');
+    if (!item.division) item.warnings.push(item.age == null ? 'no Age/Division (age unknown)' : `no Age/Division matches age ${item.age}`);
   }
+  return { plan, asOf, hasBirth: bi >= 0, hasAge: yi >= 0 };
+}
+
+async function previewParticipantsCSV() {
+  if (!S.t) return msg('importMsg', 'Save the tournament first.', false);
+  let text; try { text = await readFile($('csvFile')); } catch (e) { return msg('importMsg', e.message, false); }
+  const res = await buildImportPlan(text, S.t, S.participants.map(p => p.id));
+  if (res.error) { cancelImport(); return msg('importMsg', res.error, false); }
+  S.importPlan = res;
+  const plan = res.plan, newRows = plan.filter(p => p.status === 'new'), warned = newRows.filter(p => p.warnings.length);
+  $('importMsg').textContent = '';
+  $('importSummary').innerHTML = `${plan.length} rows • <b>${newRows.length} to import</b> • ${plan.length - newRows.length} skipped • `
+    + `<span class="${warned.length ? 'text-amber-700 font-medium' : ''}">${warned.length} with warnings</span> • ages as of ${esc(res.asOf)}${S.t.event_date ? ' (event date)' : ' (today – no event date set)'}`;
+  $('importRows').innerHTML = plan.map(p => `<tr class="border-t ${p.status !== 'new' ? 'text-slate-400' : p.warnings.length ? 'bg-amber-50' : ''}">
+      <td class="p-1">${p.line}</td><td class="p-1">${esc(p.name)}</td><td class="p-1">${esc(p.ageRaw || '')}</td><td class="p-1">${esc(p.birthRaw || '')}</td>
+      <td class="p-1 font-medium">${p.age ?? ''}</td><td class="p-1">${p.division ? esc(p.division) + (p.manual ? ' <span class="text-amber-700">(by hand)</span>' : '') : (p.status === 'new' ? '<span class="text-red-700">—</span>' : '')}</td>
+      <td class="p-1 ${p.status === 'new' ? 'text-amber-800' : ''}">${p.warnings.map(esc).join('; ')}</td></tr>`).join('');
+  $('importGo').textContent = `Import ${newRows.length}`;
+  $('importGo').disabled = !newRows.length;
+  $('importPreview').classList.remove('hidden');
+}
+function cancelImport() { S.importPlan = null; $('importPreview').classList.add('hidden'); $('importRows').innerHTML = ''; }
+
+async function importParticipantsCSV() {
+  const res = S.importPlan; if (!res) return;
+  const source = $('csvSource').value;
+  const out = res.plan.filter(p => p.status === 'new').map(p => ({ id: p.id, tournament_id: S.tid, display_name: p.name,
+    age: p.age, birth_date: p.birth, age_group: p.division, age_group_override: p.manual,
+    email: p.email, phone: p.phone, participant_code: p.code, source }));
   if (!out.length) return msg('importMsg', 'Nothing new to import (already imported?).');
   msg('importMsg', `Importing ${out.length}…`);
   for (let i = 0; i < out.length; i += 200) {
     const { error } = await sb.from('participants').upsert(out.slice(i, i + 200), { onConflict: 'id', ignoreDuplicates: true });
     if (error) return msg('importMsg', `Stopped after ${i} rows: ${error.message}`, false);
   }
-  $('csvFile').value = '';
+  $('csvFile').value = ''; cancelImport();
   await loadTournamentData();
   const missing = S.participants.filter(p => !p.age_group).length;
   msg('importMsg', `Imported ${out.length} participants.` + (missing ? ` ${missing} participant(s) have no Age/Division – they're flagged on the Participants tab.` : ''));
 }
 
 function exportParticipants() {
-  const rows = [['id', 'name', 'age', 'Age/Division', 'division_set_by_hand', 'email', 'phone', 'source', 'created_at']]
+  const rows = [['id', 'name', 'age', 'birth_date', 'Age/Division', 'division_set_by_hand', 'email', 'phone', 'source', 'created_at']]
     .concat(S.participants.slice().sort((a, b) => (a.participant_code || '').localeCompare(b.participant_code || ''))
-      .map(p => [p.participant_code, p.display_name, p.age ?? '', p.age_group ?? '', p.age_group_override ? 'yes' : 'no', p.email, p.phone, p.source, p.created_at]));
+      .map(p => [p.participant_code, p.display_name, p.age ?? '', p.birth_date ?? '', p.age_group ?? '', p.age_group_override ? 'yes' : 'no', p.email, p.phone, p.source, p.created_at]));
   download(`${slug(S.t?.name)}-participants.csv`, toCSV(rows));
 }
 function exportCatches() {
@@ -719,12 +791,19 @@ function openParticipantModal(id) {
   populateSelects();
   $('pmTitle').textContent = p ? `Edit ${p.participant_code || 'participant'}` : 'New Walk-up';
   $('pmSave').textContent = p ? 'Save' : 'Create + Print Card';
-  $('wName').value = p?.display_name || ''; $('wYears').value = p?.age ?? '';
+  $('wName').value = p?.display_name || ''; $('wYears').value = p?.age ?? ''; $('wBirth').value = p?.birth_date || '';
+  $('wYears').disabled = !!p?.birth_date;
   $('wEmail').value = p?.email || ''; $('wPhone').value = p?.phone || '';
   $('wAge').value = p?.age_group_override ? p.age_group : '';
   updateDivisionPreview(); openModal('modal'); $('wName').focus();
 }
 function readAge(v) { v = String(v ?? '').trim(); return /^\d{1,3}$/.test(v) && +v <= 120 ? parseInt(v, 10) : null; }
+function birthChanged() {
+  const b = $('wBirth').value;
+  $('wYears').disabled = !!b;
+  if (b) { const a = ageOn(b, asOfDate(S.t)); $('wYears').value = a ?? ''; }
+  updateDivisionPreview();
+}
 function updateDivisionPreview() {
   const el = $('wDivPreview'); if (!el) return;
   if ($('wAge').value) { el.innerHTML = `<span class="text-amber-800">Age/Division set by hand: ${esc($('wAge').value)}</span>`; return; }
@@ -734,10 +813,12 @@ function updateDivisionPreview() {
 }
 function saveParticipantModal() {
   const name = $('wName').value.trim(); if (!name) return;
-  const yearsRaw = $('wYears').value.trim(), age = readAge(yearsRaw);
-  if (yearsRaw && age == null) return alert('Age must be a whole number from 0 to 120.');
+  const birth = $('wBirth').value || null;
+  if (birth && (birth > asOfDate(S.t) || ageOn(birth, asOfDate(S.t)) > 120)) return alert('That birth date is after the tournament date or more than 120 years ago.');
+  const yearsRaw = $('wYears').value.trim(), age = birth ? ageOn(birth, asOfDate(S.t)) : readAge(yearsRaw);
+  if (!birth && yearsRaw && age == null) return alert('Age must be a whole number from 0 to 120.');
   const manual = $('wAge').value || null;
-  const fields = { display_name: name, age, age_group: manual || divisionForAge(S.t, age), age_group_override: !!manual,
+  const fields = { display_name: name, age, birth_date: birth, age_group: manual || divisionForAge(S.t, age), age_group_override: !!manual,
     email: $('wEmail').value.trim() || null, phone: $('wPhone').value.trim() || null };
   closeModal('modal');
   if (S.editingParticipant) {
