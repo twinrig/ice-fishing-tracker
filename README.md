@@ -20,7 +20,7 @@ Several gate laptops, weigh stations, an admin laptop and a big-screen TV share 
 | --- | --- |
 | `admin` | Everything: tournaments, species, leaderboards, imports, exports, corrections |
 | `gate` | Register walk-ups, import participants, find people and print badge cards |
-| `weigh` | Record weigh-ins, void their own mistakes, import digital weigh tickets |
+| `weigh` | Record weigh-ins and void their own mistakes |
 | `screen` | Read-only staff view (big screen / leaderboard) |
 | public (not signed in) | Leaderboard only: names, age group, placements, weights (lbs). No emails/phones. |
 
@@ -90,6 +90,8 @@ To remove someone completely, delete their user in Authentication → Users (the
 
 4. **Sign in on the site** with "Staff sign in", go to **Setup**, create the tournament (name, year, age groups,
    species), and adjust the leaderboards. Four default boards are created automatically.
+   For a Species board the picker offers **Each species** (one board per species), **All species** (one board
+   ranking every species together, e.g. biggest fish of any kind), or a single species.
 
 ## Tournament day checklist
 
@@ -102,7 +104,6 @@ To remove someone completely, delete their user in Authentication → Users (the
 ## CSV formats
 
 - **Participants (Setup → Import):** `name, ageGroup` + optional `email, phone, id`. Re-importing the same file skips rows already imported.
-- **Digital weigh tickets (Weigh-in tab):** `id` (yyyy_#####), `species`, `lbs` (decimal pounds, e.g. `2.35`), optional `station, time, ticket`.
 - **Exports (Setup):** participants, weigh-ins, leaderboard.
 
 Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, must be > 0 and ≤ 500).

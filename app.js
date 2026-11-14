@@ -470,7 +470,7 @@ async function saveTournament() {
 }
 
 function boardFilterOptions(c) {
-  if (c.board_type === 'species') return `<option value="">Each species</option>` + S.species.map(s => `<option value="${s.id}" ${c.species_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  if (c.board_type === 'species') return `<option value="">Each species (one board per species)</option><option value="__all__" ${c.all_species ? 'selected' : ''}>All species (combined)</option>` + S.species.map(s => `<option value="${s.id}" ${c.species_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   if (c.board_type === 'age_group') return `<option value="">Each age group</option>` + (S.t?.age_groups || []).map(g => `<option value="${esc(g)}" ${c.age_group === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
   return '<option value="">All anglers</option>';
 }
@@ -503,7 +503,8 @@ async function saveBoardConfig(id) {
     title: row.querySelector('.cf-title').value.trim() || 'Leaderboard', board_type: type,
     scoring: row.querySelector('.cf-scoring').value, top_n: parseInt(row.querySelector('.cf-top').value, 10) || 10,
     sort_order: parseInt(row.querySelector('.cf-order').value, 10) || 0, enabled: row.querySelector('.cf-enabled').checked,
-    species_id: type === 'species' ? filter : null, age_group: type === 'age_group' ? filter : null
+    all_species: type === 'species' && filter === '__all__',
+    species_id: type === 'species' && filter !== '__all__' ? filter : null, age_group: type === 'age_group' ? filter : null
   };
   const { error } = await sb.from('leaderboard_configs').update(patch).eq('id', id);
   if (error) return msg('configMsg', error.message, false);
@@ -755,39 +756,6 @@ function voidCatch(id) {
   const reason = prompt('Reason for voiding this weigh-in?'); if (reason === null) return;
   enqueue({ kind: 'update', table: 'catches', id, patch: { status: 'voided', void_reason: reason.slice(0, 200) || null } });
 }
-async function importTicketsCSV() {
-  if (!S.t) return msg('ticketMsg', 'Select a tournament first.', false);
-  let text; try { text = await readFile($('ticketFile')); } catch (e) { return msg('ticketMsg', e.message, false); }
-  const rows = parseCSV(text);
-  if (rows.length < 2) return msg('ticketMsg', 'CSV appears empty.', false);
-  const h = rows[0].map(x => x.toLowerCase().replace(/[^a-z]/g, ''));
-  const ix = { code: headerIndex(h, 'id', 'participantid', 'participant', 'code', 'number'), sp: headerIndex(h, 'species', 'fish'),
-    lbs: headerIndex(h, 'lbs', 'lb', 'pounds', 'weightlbs', 'weight'), st: headerIndex(h, 'station'),
-    time: headerIndex(h, 'time', 'weighedat', 'timestamp'), ticket: headerIndex(h, 'ticket', 'ticketid') };
-  if (ix.code < 0 || ix.sp < 0 || ix.lbs < 0) return msg('ticketMsg', 'Need id, species and lbs columns.', false);
-  const byCode = Object.fromEntries(S.participants.map(p => [p.participant_code, p]));
-  const bySp = Object.fromEntries(S.species.map(s => [s.name.toLowerCase(), s]));
-  const known = new Set(S.catches.map(c => c.id));
-  let added = 0; const errs = [];
-  for (const [n, r] of rows.slice(1).entries()) {
-    const p = byCode[normCode(S.t.year, r[ix.code])], sp = bySp[(r[ix.sp] || '').toLowerCase()];
-    const lbs = round2(parseFloat(r[ix.lbs]));
-    if (!p) { errs.push(`row ${n + 2}: unknown participant`); continue; }
-    if (!sp) { errs.push(`row ${n + 2}: unknown species`); continue; }
-    if (!(lbs > 0 && lbs <= 500)) { errs.push(`row ${n + 2}: bad weight`); continue; }
-    let when = ix.time >= 0 && r[ix.time] ? new Date(r[ix.time]) : null;
-    if (when && isNaN(when)) when = null;
-    const ticket = ix.ticket >= 0 ? r[ix.ticket] : '';
-    const id = /^[0-9a-f-]{36}$/i.test(ticket) ? ticket : await hashUuid([S.tid, p.id, sp.id, lbs, ticket || (when ? when.toISOString() : n)].join('|'));
-    if (known.has(id)) continue; known.add(id);
-    enqueue({ kind: 'insert', table: 'catches', row: { id, tournament_id: S.tid, participant_id: p.id, species_id: sp.id,
-      weight_lbs: lbs, station: ix.st >= 0 ? r[ix.st] || null : 'Import',
-      weighed_at: (when || new Date()).toISOString(), source: 'import', status: 'active' } });
-    added++;
-  }
-  $('ticketFile').value = '';
-  msg('ticketMsg', `Queued ${added} weigh-ins.` + (errs.length ? ` Skipped ${errs.length}: ${errs.slice(0, 5).join('; ')}` : ''), !errs.length);
-}
 
 // ---------------------------------------------------------------- leaderboards
 // Same logic as private.leaderboard() in the database, run locally for staff (instant + offline).
@@ -810,7 +778,7 @@ function computeBoards() {
   };
   const boards = [];
   for (const c of S.configs.filter(c => c.enabled).sort((a, b) => a.sort_order - b.sort_order)) {
-    if (c.board_type === 'species' && !c.species_id) S.species.forEach(s => boards.push({ title: `${c.title} – ${s.name}`, scoring: c.scoring, rows: rowsFor(c.scoring, s.id, null, c.top_n) }));
+    if (c.board_type === 'species' && !c.species_id && !c.all_species) S.species.forEach(s => boards.push({ title: `${c.title} – ${s.name}`, scoring: c.scoring, rows: rowsFor(c.scoring, s.id, null, c.top_n) }));
     else if (c.board_type === 'age_group' && !c.age_group) (S.t.age_groups || []).forEach(g => boards.push({ title: `${c.title} – ${g}`, scoring: c.scoring, rows: rowsFor(c.scoring, null, g, c.top_n) }));
     else boards.push({ title: c.title, scoring: c.scoring, rows: rowsFor(c.scoring, c.species_id, c.age_group, c.top_n) });
   }

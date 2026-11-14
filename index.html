@@ -101,7 +101,7 @@
         <h3 class="font-semibold">Leaderboards</h3>
         <button onclick="addBoardConfig()" class="text-sm border px-3 py-1 rounded">+ Add board</button>
       </div>
-      <p class="text-xs text-slate-500 mb-3">"Each species" / "Each age group" makes one board per species or group. Order controls the big-screen rotation.</p>
+      <p class="text-xs text-slate-500 mb-3">"Each species" / "Each age group" makes one board per species or group; "All species" makes one board ranking every species together. Order controls the big-screen rotation.</p>
       <div id="configList" class="space-y-2 text-sm"></div>
       <div id="configMsg" class="mt-2 text-sm"></div>
     </div>
@@ -176,12 +176,6 @@
           <button onclick="submitWeighIn()" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold">Submit & Print Ticket</button>
         </div>
         <div id="weighMsg" class="mt-2 text-sm"></div>
-        <hr class="my-5">
-        <h3 class="font-semibold mb-2 text-sm">Import digital weigh tickets (CSV)</h3>
-        <p class="text-xs text-slate-600 mb-2">Columns: <code>id</code> (yyyy_#####), <code>species</code>, <code>lbs</code> (decimal pounds, e.g. 2.35), optional <code>station</code>, <code>time</code>, <code>ticket</code>. Safe to re-import.</p>
-        <input type="file" id="ticketFile" accept=".csv,text/csv" class="text-sm mb-2">
-        <button onclick="importTicketsCSV()" class="bg-green-600 text-white px-4 py-1 rounded text-sm">Import tickets</button>
-        <div id="ticketMsg" class="mt-2 text-sm"></div>
       </div>
       <div class="bg-white rounded-xl shadow p-6">
         <h3 class="font-semibold mb-2">Recent weigh-ins</h3>
