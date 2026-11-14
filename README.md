@@ -141,7 +141,9 @@ signed-in staff account (`recorded_by`) and the station name set on that laptop.
 
 `samples/test-anglers.csv` – 40 fake anglers mixing age only, birth date only (mixed formats), both
 (some disagreeing), neither, and bad dates, including the 13/14 and 18/19 boundaries for a 2027-01-23 event.
-Import it into a separate **test tournament**, not a real one (two rows carry fixed ids 2027_00101/00102).
+Import it into a separate **test tournament**, not a real one. Participant numbers are per tournament, so this
+only affects the tournament you import into: the two rows with fixed ids 2027_00101/00102 move that tournament's
+next number up to 2027_00103.
 
 ## Backups
 

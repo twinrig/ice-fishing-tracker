@@ -116,10 +116,21 @@
     <div class="bg-white rounded-xl shadow p-6">
       <h3 class="font-semibold mb-2">Import Participants (pre-registrations or walk-ups)</h3>
       <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, optional <code>age</code> and/or a birth date (<code>birthdate</code>, <code>birth_date</code>, <code>dob</code>, <code>date_of_birth</code>, <code>birthday</code>; formats 2014-03-09, 3/9/2014, 03/09/2014, 3/9/14), <code>Age/Division</code>, <code>email</code>, <code>phone</code>, <code>id</code> (yyyy_#####). Ages are worked out as of the tournament's event date; a birth date wins over an age. With an age, the Age/Division is assigned automatically; without one, the file's Age/Division is used as a hand-set choice. Numbers are assigned automatically when <code>id</code> is blank. Re-importing the same file won't create duplicates.</p>
-      <div class="flex flex-wrap gap-2 items-center">
-        <input type="file" id="csvFile" accept=".csv,text/csv" class="text-sm">
-        <select id="csvSource" class="border rounded px-2 py-1 text-sm"><option value="preregistered">Pre-registered</option><option value="walkup">Walk-ups</option></select>
-        <button onclick="previewParticipantsCSV()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">Preview</button>
+      <div id="csvDrop" class="file-drop border-2 border-dashed border-blue-300 bg-blue-50 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+        <input type="file" id="csvFile" accept=".csv,text/csv" class="sr-only" onchange="csvChosen()">
+        <label for="csvFile" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();$('csvFile').click()}"
+          class="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-base px-6 py-3 rounded-lg shadow cursor-pointer select-none focus:outline-none focus:ring-4 focus:ring-blue-300 w-full sm:w-auto">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0-12l-4 4m4-4l4 4"/></svg>
+          Choose CSV file…</label>
+        <div class="min-w-0 flex-1 text-sm">
+          <div id="csvFileName" class="font-medium text-slate-500 truncate">No file chosen</div>
+          <div class="text-xs text-slate-500 hidden sm:block">or drag and drop a .csv file here</div>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2 items-center mt-3">
+        <label class="text-sm text-slate-600">Import as</label>
+        <select id="csvSource" class="border rounded px-2 py-2 text-sm"><option value="preregistered">Pre-registered</option><option value="walkup">Walk-ups</option></select>
+        <button onclick="previewParticipantsCSV()" class="bg-slate-700 text-white px-4 py-2 rounded-lg text-sm">Preview</button>
       </div>
       <div id="importMsg" class="mt-3 text-sm"></div>
       <div id="importPreview" class="mt-3 hidden">

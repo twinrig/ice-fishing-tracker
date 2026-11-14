@@ -709,6 +709,27 @@ async function previewParticipantsCSV() {
   $('importGo').disabled = !newRows.length;
   $('importPreview').classList.remove('hidden');
 }
+function csvChosen(quiet) {
+  const f = $('csvFile').files[0], el = $('csvFileName');
+  el.textContent = f ? `📄 ${f.name}` : 'No file chosen';
+  el.className = 'font-medium truncate ' + (f ? 'text-slate-900' : 'text-slate-500');
+  if (f && !quiet) previewParticipantsCSV(); else if (!f) cancelImport();
+}
+function setupFileDrop() {
+  const z = $('csvDrop'); if (!z) return;
+  const on = e => { e.preventDefault(); z.classList.add('ring-4', 'ring-blue-300', 'bg-blue-100'); };
+  const off = () => z.classList.remove('ring-4', 'ring-blue-300', 'bg-blue-100');
+  ['dragenter', 'dragover'].forEach(ev => z.addEventListener(ev, on));
+  ['dragleave', 'dragend'].forEach(ev => z.addEventListener(ev, off));
+  z.addEventListener('drop', e => {
+    e.preventDefault(); off();
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return;
+    if (!/\.csv$/i.test(f.name) && f.type && !/csv|text/.test(f.type)) return msg('importMsg', 'Please drop a .csv file.', false);
+    const dt = new DataTransfer(); dt.items.add(f); $('csvFile').files = dt.files; csvChosen();
+  });
+}
+document.addEventListener('DOMContentLoaded', setupFileDrop);
+if (document.readyState !== 'loading') setupFileDrop();
 function cancelImport() { S.importPlan = null; $('importPreview').classList.add('hidden'); $('importRows').innerHTML = ''; }
 
 async function importParticipantsCSV() {
@@ -723,7 +744,7 @@ async function importParticipantsCSV() {
     const { error } = await sb.from('participants').upsert(out.slice(i, i + 200), { onConflict: 'id', ignoreDuplicates: true });
     if (error) return msg('importMsg', `Stopped after ${i} rows: ${error.message}`, false);
   }
-  $('csvFile').value = ''; cancelImport();
+  $('csvFile').value = ''; csvChosen(true); cancelImport();
   await loadTournamentData();
   const missing = S.participants.filter(p => !p.age_group).length;
   msg('importMsg', `Imported ${out.length} participants.` + (missing ? ` ${missing} participant(s) have no Age/Division – they're flagged on the Participants tab.` : ''));
