@@ -22,7 +22,7 @@ Several gate laptops, weigh stations, an admin laptop and a big-screen TV share 
 | `gate` | Register walk-ups, import participants, find people and print badge cards |
 | `weigh` | Record weigh-ins and void their own mistakes |
 | `screen` | Read-only staff view (big screen / leaderboard) |
-| public (not signed in) | Leaderboard only: names, age group, placements, weights (lbs). No emails/phones. |
+| public (not signed in) | Leaderboard only: names, Age/Division, placements, weights (lbs). No emails, phones or ages. |
 
 A signed-in account with no role in `staff_roles` can see nothing.
 
@@ -44,7 +44,7 @@ Things to know:
   queue, where you can retry or discard it.
 - Reserved but unused badge numbers leave gaps in the numbering. That's harmless.
 
-**Public leaderboard on phones.** Each leaderboard (overall, big fish, each species, each age group…) is its own tab;
+**Public leaderboard on phones.** Each leaderboard (overall, big fish, each species, each Age/Division…) is its own tab;
 the tab row scrolls sideways on small screens. The selected tab is kept in the link (for example
 `…/?t=<tournament id>#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
 
@@ -88,13 +88,13 @@ where role = 'weigh'
 Once you're an admin you can also add roles from the Table Editor (`staff_roles`) or via the API.
 To remove someone completely, delete their user in Authentication → Users (their roles go with it).
 
-4. **Sign in on the site** with "Staff sign in", go to **Setup**, create the tournament (name, year, age groups,
-   species), and adjust the leaderboards. Four default boards are created automatically.
-   Species and Age group / Division boards have the same picker choices:
-   - **Each species / age group** – a separate tab (and TV slide) per species or group.
-   - **All species / age groups, grouped on one board** – ONE tab (one TV slide, split into pages on the TV
+4. **Sign in on the site** with "Staff sign in", go to **Setup**, create the tournament (name, year, Age/Division
+   names with their age ranges, species), and adjust the leaderboards. Four default boards are created automatically.
+   Species and Age/Division boards have the same picker choices:
+   - **Each species / Age/Division** – a separate tab (and TV slide) per species or group.
+   - **All species / Age/Divisions, grouped on one board** – ONE tab (one TV slide, split into pages on the TV
      if it's long) with a separately ranked section per species or group (Walleye, Perch, …).
-   - **Any species / age group, combined ranking** – one tab, everyone ranked together.
+   - **Any species / Age/Division, combined ranking** – one tab, everyone ranked together.
    - Or pick a single species / group.
 
 ## Tournament day checklist
@@ -105,10 +105,25 @@ To remove someone completely, delete their user in Authentication → Users (the
 - Set the tournament's status to **Active** so it's the default on the public page.
 - Badge cards and weigh tickets print through the browser print dialog; pick the Brother QL-800 with 62 mm labels.
 
+## Ages and Age/Division
+
+- Each participant has an **age** (whole years), entered on walk-up/edit or imported from CSV.
+- In **Setup**, each Age/Division has a **Min** and **Max** age. Leave one blank for open-ended
+  (Max 13 = "13 & under", Min 19 = "19 and up"). If ranges overlap, the first one listed wins.
+- The database assigns the Age/Division automatically on every add, import and age edit, and re-assigns
+  everyone when the ranges change, so all laptops (and changes that sync later from offline laptops) agree.
+- **Set by hand:** in the participant's Edit window, pick a specific Age/Division instead of "automatic".
+  It's shown with a "set by hand" tag and won't be changed by the ranges. Choose "automatic" to undo.
+- If the age is blank or no range matches, the Age/Division is left empty and the participant is flagged
+  in red on the Participants tab ("without Age/Division" link filters to them). They won't appear on
+  Age/Division leaderboards until fixed.
+
 ## CSV formats
 
-- **Participants (Setup → Import):** `name, ageGroup` + optional `email, phone, id`. Re-importing the same file skips rows already imported.
-- **Exports (Setup):** participants, weigh-ins, leaderboard.
+- **Participants (Setup → Import):** `name` + optional `age`, `Age/Division`, `email`, `phone`, `id`.
+  With an `age`, the Age/Division is assigned automatically from the ranges (the file's Age/Division is ignored).
+  Without an age, the file's Age/Division (if any) is kept as a hand-set choice. Re-importing the same file skips rows already imported.
+- **Exports (Setup):** participants (including `age`, `Age/Division`, `division_set_by_hand`), weigh-ins, leaderboard.
 
 Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, must be > 0 and ≤ 500).
 There is no angler check-in step, no fish length and no staff initials. Each weigh-in automatically records the

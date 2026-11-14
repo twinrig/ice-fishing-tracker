@@ -85,11 +85,18 @@
           <select id="tStatus" class="w-full border rounded px-3 py-2">
             <option value="setup">Setup</option><option value="active">Active (on the ice)</option><option value="closed">Closed</option>
           </select></div>
-        <div><label class="block text-sm font-medium">Age Groups / Divisions (comma separated)</label>
-          <input id="ageGroups" class="w-full border rounded px-3 py-2" value="Youth, Adult, Senior"></div>
         <div><label class="block text-sm font-medium">Species (comma separated)</label>
           <input id="speciesList" class="w-full border rounded px-3 py-2" value="Walleye, Perch, Pike, Crappie"></div>
         <label class="flex items-center gap-2 text-sm"><input id="tPublic" type="checkbox" checked> Show on the public leaderboard</label>
+        <div class="md:col-span-2">
+          <div class="flex justify-between items-center">
+            <label class="block text-sm font-medium">Age/Division (age ranges in whole years)</label>
+            <button type="button" onclick="addDivisionRow()" class="text-xs border px-2 py-1 rounded">+ Add Age/Division</button>
+          </div>
+          <p class="text-xs text-slate-500 mb-2">Participants are placed in the first Age/Division whose range contains their age. Leave Min or Max blank for open-ended (e.g. Max 13 = "13 & under", Min 19 = "19 and up"). Changing ranges re-assigns everyone not set by hand.</p>
+          <div id="divisionRows" class="space-y-2"></div>
+          <div id="divisionWarn" class="text-xs text-amber-700 mt-1"></div>
+        </div>
       </div>
       <button onclick="saveTournament()" class="mt-4 bg-blue-600 text-white px-5 py-2 rounded-lg">Save Tournament</button>
       <div id="setupMsg" class="mt-3 text-sm"></div>
@@ -101,14 +108,14 @@
         <h3 class="font-semibold">Leaderboards</h3>
         <button onclick="addBoardConfig()" class="text-sm border px-3 py-1 rounded">+ Add board</button>
       </div>
-      <p class="text-xs text-slate-500 mb-3">For Species and Age group / Division boards: "Each" makes a separate tab per species or group; "All …, grouped on one board" makes one tab with a separately ranked section for each; "Any …, combined ranking" ranks everyone together on one tab. Order controls the big-screen rotation.</p>
+      <p class="text-xs text-slate-500 mb-3">For Species and Age/Division boards: "Each" makes a separate tab per species or group; "All …, grouped on one board" makes one tab with a separately ranked section for each; "Any …, combined ranking" ranks everyone together on one tab. Order controls the big-screen rotation.</p>
       <div id="configList" class="space-y-2 text-sm"></div>
       <div id="configMsg" class="mt-2 text-sm"></div>
     </div>
 
     <div class="bg-white rounded-xl shadow p-6">
       <h3 class="font-semibold mb-2">Import Participants (pre-registrations or walk-ups)</h3>
-      <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, <code>ageGroup</code> (optional: <code>email</code>, <code>phone</code>, <code>id</code> in yyyy_##### form). Numbers are assigned automatically when <code>id</code> is blank. Re-importing the same file won't create duplicates.</p>
+      <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, optional <code>age</code>, <code>Age/Division</code>, <code>email</code>, <code>phone</code>, <code>id</code> (yyyy_#####). With an <code>age</code>, the Age/Division is assigned automatically from the ranges; without one, the file's Age/Division is used as a manual choice. Numbers are assigned automatically when <code>id</code> is blank. Re-importing the same file won't create duplicates.</p>
       <div class="flex flex-wrap gap-2 items-center">
         <input type="file" id="csvFile" accept=".csv,text/csv" class="text-sm">
         <select id="csvSource" class="border rounded px-2 py-1 text-sm"><option value="preregistered">Pre-registered</option><option value="walkup">Walk-ups</option></select>
@@ -226,13 +233,17 @@
 <!-- Walk-up Modal -->
 <div id="modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
   <div class="bg-white rounded-xl p-6 w-full max-w-md">
-    <h3 class="text-lg font-semibold mb-4">New Walk-up</h3>
+    <h3 class="text-lg font-semibold mb-4" id="pmTitle">New Walk-up</h3>
     <input id="wName" placeholder="Full Name" class="w-full border rounded px-3 py-2 mb-3">
-    <select id="wAge" class="w-full border rounded px-3 py-2 mb-3"></select>
+    <div class="flex gap-2 mb-1">
+      <input id="wYears" type="number" inputmode="numeric" min="0" max="120" step="1" placeholder="Age" oninput="updateDivisionPreview()" class="w-24 border rounded px-3 py-2">
+      <select id="wAge" onchange="updateDivisionPreview()" class="flex-1 border rounded px-3 py-2" title="Age/Division"></select>
+    </div>
+    <div id="wDivPreview" class="text-xs mb-3"></div>
     <input id="wEmail" placeholder="Email (optional)" class="w-full border rounded px-3 py-2 mb-3">
     <input id="wPhone" placeholder="Phone (optional)" class="w-full border rounded px-3 py-2 mb-4">
     <div class="flex gap-2">
-      <button onclick="createWalkup()" class="flex-1 bg-green-600 text-white py-2 rounded">Create + Print Card</button>
+      <button onclick="saveParticipantModal()" id="pmSave" class="flex-1 bg-green-600 text-white py-2 rounded">Create + Print Card</button>
       <button onclick="closeModal('modal')" class="px-4 py-2 border rounded">Cancel</button>
     </div>
   </div>

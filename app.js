@@ -412,8 +412,80 @@ function newTournamentForm() {
   $('setupTitle').textContent = 'New Tournament';
   $('tName').value = ''; $('tYear').value = new Date().getFullYear(); $('tDate').value = '';
   $('tStatus').value = 'setup'; $('tPublic').checked = true;
-  $('ageGroups').value = 'Youth, Adult, Senior'; $('speciesList').value = 'Walleye, Perch, Pike, Crappie';
+  renderDivisionRows([{ name: 'Youth', min: null, max: 17 }, { name: 'Adult', min: 18, max: 64 }, { name: 'Senior', min: 65, max: null }]);
+  $('speciesList').value = 'Walleye, Perch, Pike, Crappie';
   $('setupMsg').textContent = ''; $('publicLinks').innerHTML = '';
+}
+// ---- Age/Division ranges
+// Ordered divisions for a tournament: [{name, min, max, suggested}]
+function divisionsOf(t, suggest) {
+  const names = t?.age_groups || [], ranges = t?.age_group_ranges || {};
+  const list = names.map(n => ({ name: n, min: ranges[n]?.min ?? null, max: ranges[n]?.max ?? null, suggested: false }));
+  if (suggest && !Object.keys(ranges).length) suggestRanges(list);
+  return list;
+}
+// Guess ranges from names like "13 & Under", "14-18", "65+", "U12", "Adult" (only used when none are saved yet).
+function suggestRanges(list) {
+  for (const d of list) {
+    const n = d.name.toLowerCase(); let m;
+    if ((m = n.match(/(\d+)\s*(?:-|–|to)\s*(\d+)/))) { d.min = +m[1]; d.max = +m[2]; }
+    else if ((m = n.match(/(\d+)\s*(?:&|and)?\s*(?:under|younger|below)/)) || (m = n.match(/(?:under|u)\s*(\d+)/))) d.max = +m[1];
+    else if ((m = n.match(/(\d+)\s*(?:\+|&\s*(?:over|up|older)|and\s*(?:over|up|older)|plus)/))) d.min = +m[1];
+    else continue;
+    d.suggested = true;
+  }
+  for (const d of list.filter(d => d.min == null && d.max == null && /adult/i.test(d.name))) {
+    const below = list.filter(x => x !== d && x.max != null).map(x => x.max), above = list.filter(x => x !== d && x.min != null && x.max == null).map(x => x.min);
+    if (below.length) { d.min = Math.max(...below) + 1; if (above.length) d.max = Math.min(...above) - 1; d.suggested = true; }
+  }
+}
+function renderDivisionRows(list) {
+  $('divisionRows').innerHTML = list.map(d => `
+    <div class="div-row flex flex-wrap gap-2 items-center">
+      <input class="dv-name border rounded px-2 py-1 flex-1 min-w-[8rem]" value="${esc(d.name)}" placeholder="Age/Division name">
+      <label class="text-xs">Min <input class="dv-min border rounded px-2 py-1 w-16 ${d.suggested ? 'bg-amber-50' : ''}" type="number" min="0" max="120" value="${d.min ?? ''}"></label>
+      <label class="text-xs">Max <input class="dv-max border rounded px-2 py-1 w-16 ${d.suggested ? 'bg-amber-50' : ''}" type="number" min="0" max="120" value="${d.max ?? ''}"></label>
+      ${d.suggested ? '<span class="text-xs text-amber-700">suggested – check &amp; save</span>' : ''}
+      <button type="button" onclick="this.closest('.div-row').remove(); checkDivisionRows()" class="text-xs border px-2 py-1 rounded text-red-700">Remove</button>
+    </div>`).join('');
+  $('divisionRows').oninput = checkDivisionRows;
+  checkDivisionRows();
+}
+function addDivisionRow() { const list = readDivisionRows(true).list; list.push({ name: '', min: null, max: null }); renderDivisionRows(list); }
+function readDivisionRows(loose) {
+  const list = [...document.querySelectorAll('#divisionRows .div-row')].map(r => {
+    const v = c => { const x = r.querySelector(c).value.trim(); return x === '' ? null : parseInt(x, 10); };
+    return { name: r.querySelector('.dv-name').value.trim(), min: v('.dv-min'), max: v('.dv-max') };
+  });
+  if (loose) return { list };
+  const named = list.filter(d => d.name);
+  if (new Set(named.map(d => d.name.toLowerCase())).size !== named.length) return { error: 'Age/Division names must be unique.' };
+  const bad = named.find(d => d.min != null && d.max != null && d.min > d.max);
+  if (bad) return { error: `${bad.name}: Min is greater than Max.` };
+  return { list: named };
+}
+function checkDivisionRows() {
+  const { list } = readDivisionRows(true); const w = [];
+  const named = list.filter(d => d.name);
+  named.filter(d => d.min == null && d.max == null).forEach(d => w.push(`${d.name} has no age range, so nobody is placed there automatically.`));
+  for (let i = 0; i < named.length; i++) for (let j = i + 1; j < named.length; j++) {
+    const a = named[i], b = named[j];
+    if ((a.min != null || a.max != null) && (b.min != null || b.max != null) && (a.min ?? 0) <= (b.max ?? 999) && (b.min ?? 0) <= (a.max ?? 999))
+      w.push(`${a.name} and ${b.name} overlap; the first one listed wins.`);
+  }
+  $('divisionWarn').textContent = w.join(' ');
+}
+// Mirrors private.division_for_age() so a laptop can show/print it before syncing.
+function divisionForAge(t, age) {
+  if (age == null || age === '' || isNaN(age)) return null;
+  const d = divisionsOf(t).find(d => (d.min != null || d.max != null) && (d.min == null || age >= d.min) && (d.max == null || age <= d.max));
+  return d ? d.name : null;
+}
+function divisionLabel(p) {
+  if (!p.age_group) return `<span class="text-red-700 font-medium">⚠ No Age/Division${p.age == null ? ' (age missing)' : ''}</span>`;
+  const unknown = S.t && !(S.t.age_groups || []).includes(p.age_group);
+  return esc(p.age_group) + (p.age_group_override ? ' <span class="text-xs bg-amber-100 text-amber-800 px-1 rounded">set by hand</span>' : '')
+    + (unknown ? ' <span class="text-xs bg-red-100 text-red-800 px-1 rounded">not in this tournament\'s Age/Division list</span>' : '');
 }
 function fillSetupForm() {
   if (!S.t) { if (!S.tid) newTournamentForm(); return; }
@@ -421,7 +493,7 @@ function fillSetupForm() {
   $('setupTitle').textContent = 'Tournament Setup – ' + S.t.name;
   $('tName').value = S.t.name; $('tYear').value = S.t.year; $('tDate').value = S.t.event_date || '';
   $('tStatus').value = S.t.status; $('tPublic').checked = !!S.t.public_visible;
-  $('ageGroups').value = (S.t.age_groups || []).join(', ');
+  renderDivisionRows(divisionsOf(S.t, true));
   $('speciesList').value = S.species.map(s => s.name).join(', ');
   const base = location.origin + location.pathname;
   $('publicLinks').innerHTML = `Public leaderboard: <a class="text-blue-700 underline" href="${base}?t=${S.t.id}" target="_blank">${esc(base)}?t=${S.t.id}</a><br>
@@ -434,8 +506,11 @@ async function saveTournament() {
   const row = {
     name: $('tName').value.trim() || 'Untitled', year, event_date: $('tDate').value || null,
     status: $('tStatus').value, public_visible: $('tPublic').checked,
-    age_groups: $('ageGroups').value.split(',').map(s => s.trim()).filter(Boolean)
   };
+  const divs = readDivisionRows();
+  if (divs.error) return msg('setupMsg', divs.error, false);
+  row.age_groups = divs.list.map(d => d.name);
+  row.age_group_ranges = Object.fromEntries(divs.list.map(d => [d.name, { min: d.min, max: d.max }]));
   const speciesNames = [...new Set($('speciesList').value.split(',').map(s => s.trim()).filter(Boolean))];
   msg('setupMsg', 'Saving…');
   let tid = S.editingNew ? null : S.tid;
@@ -479,7 +554,7 @@ function boardFilterOptions(c) {
     `<option value="__combined__" ${!hasFilter && mode === 'combined' ? 'selected' : ''}>${any}</option>`;
   if (c.board_type === 'species') return special('Each species (separate tabs)', 'All species, grouped on one board', 'Any species, combined ranking', !!c.species_id)
     + S.species.map(s => `<option value="${s.id}" ${c.species_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
-  if (c.board_type === 'age_group') return special('Each age group / division (separate tabs)', 'All age groups / divisions, grouped on one board', 'Any age group / division, combined ranking', !!c.age_group)
+  if (c.board_type === 'age_group') return special('Each Age/Division (separate tabs)', 'All Age/Divisions, grouped on one board', 'Any Age/Division, combined ranking', !!c.age_group)
     + (S.t?.age_groups || []).map(g => `<option value="${esc(g)}" ${c.age_group === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
   return '<option value="">All anglers</option>';
 }
@@ -492,7 +567,7 @@ function renderConfigs() {
       <input class="cf-order border rounded px-2 py-1 w-14" type="number" value="${c.sort_order}" title="Order">
       <input class="cf-title border rounded px-2 py-1 flex-1 min-w-[10rem]" value="${esc(c.title)}">
       <select class="cf-type border rounded px-2 py-1" onchange="this.closest('[data-id]').querySelector('.cf-filter').innerHTML = boardFilterOptions({ board_type: this.value })">
-        ${['overall', 'species', 'age_group'].map(t => `<option value="${t}" ${c.board_type === t ? 'selected' : ''}>${{ overall: 'Overall', species: 'Species', age_group: 'Age group / Division' }[t]}</option>`).join('')}
+        ${['overall', 'species', 'age_group'].map(t => `<option value="${t}" ${c.board_type === t ? 'selected' : ''}>${{ overall: 'Overall', species: 'Species', age_group: 'Age/Division' }[t]}</option>`).join('')}
       </select>
       <select class="cf-filter border rounded px-2 py-1">${filterOpts(c)}</select>
       <select class="cf-scoring border rounded px-2 py-1">
@@ -549,7 +624,8 @@ async function importParticipantsCSV() {
   const rows = parseCSV(text);
   if (rows.length < 2) return msg('importMsg', 'CSV appears empty or missing header.', false);
   const h = rows[0].map(x => x.toLowerCase().replace(/[^a-z]/g, ''));
-  const ni = h.findIndex(x => x.includes('name')), ai = h.findIndex(x => x.includes('age') || x.includes('group'));
+  const ni = h.findIndex(x => x.includes('name')), yi = headerIndex(h, 'age', 'ageyears', 'years');
+  const ai = h.findIndex(x => x.includes('division') || x.includes('group'));
   const ei = headerIndex(h, 'email', 'emailaddress'), pi = headerIndex(h, 'phone', 'phonenumber', 'cell');
   const ci = headerIndex(h, 'id', 'code', 'participantid', 'participantcode', 'number');
   if (ni === -1) return msg('importMsg', 'CSV must have a "name" column.', false);
@@ -563,8 +639,11 @@ async function importParticipantsCSV() {
     const id = await hashUuid([S.tid, name.toLowerCase(), (email || '').toLowerCase(), phone || '', code || ''].join('|'));
     if (existingIds.has(id)) continue;
     existingIds.add(id);
-    out.push({ id, tournament_id: S.tid, display_name: name, age_group: (ai >= 0 && r[ai]) || S.t.age_groups?.[0] || null,
-      email, phone, participant_code: code, source });
+    const age = yi >= 0 && /^\d{1,3}$/.test(r[yi] || '') ? parseInt(r[yi], 10) : null;
+    const fileDiv = ai >= 0 ? (r[ai] || null) : null;
+    const manual = age == null && !!fileDiv; // no age: use the file's Age/Division as a manual choice
+    out.push({ id, tournament_id: S.tid, display_name: name, age, age_group: manual ? fileDiv : divisionForAge(S.t, age),
+      age_group_override: manual, email, phone, participant_code: code, source });
   }
   if (!out.length) return msg('importMsg', 'Nothing new to import (already imported?).');
   msg('importMsg', `Importing ${out.length}…`);
@@ -574,18 +653,19 @@ async function importParticipantsCSV() {
   }
   $('csvFile').value = '';
   await loadTournamentData();
-  msg('importMsg', `Imported ${out.length} participants.`);
+  const missing = S.participants.filter(p => !p.age_group).length;
+  msg('importMsg', `Imported ${out.length} participants.` + (missing ? ` ${missing} participant(s) have no Age/Division – they're flagged on the Participants tab.` : ''));
 }
 
 function exportParticipants() {
-  const rows = [['id', 'name', 'age_group', 'email', 'phone', 'source', 'created_at']]
+  const rows = [['id', 'name', 'age', 'Age/Division', 'division_set_by_hand', 'email', 'phone', 'source', 'created_at']]
     .concat(S.participants.slice().sort((a, b) => (a.participant_code || '').localeCompare(b.participant_code || ''))
-      .map(p => [p.participant_code, p.display_name, p.age_group, p.email, p.phone, p.source, p.created_at]));
+      .map(p => [p.participant_code, p.display_name, p.age ?? '', p.age_group ?? '', p.age_group_override ? 'yes' : 'no', p.email, p.phone, p.source, p.created_at]));
   download(`${slug(S.t?.name)}-participants.csv`, toCSV(rows));
 }
 function exportCatches() {
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
-  const rows = [['ticket', 'id', 'name', 'age_group', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason']]
+  const rows = [['ticket', 'id', 'name', 'Age/Division', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason']]
     .concat(S.catches.slice().sort((a, b) => (a.weighed_at || '').localeCompare(b.weighed_at || '')).map(c => {
       const p = pById[c.participant_id] || {};
       return [c.id, p.participant_code, p.display_name, p.age_group, sById[c.species_id]?.name, Number(c.weight_lbs).toFixed(2), c.station, c.weighed_at, c.status, c.void_reason];
@@ -594,7 +674,7 @@ function exportCatches() {
 }
 function exportLeaderboard() {
   const data = currentBoards();
-  const rows = [['board', 'section', 'rank', 'name', 'age_group', 'fish', 'lbs']];
+  const rows = [['board', 'section', 'rank', 'name', 'Age/Division', 'fish', 'lbs']];
   (data?.boards || []).forEach(b => boardSections(b).forEach(sec => sec.rows.forEach(r => rows.push([b.title, sec.name || '', r.rank, r.name, r.group, r.fish, Number(r.lbs).toFixed(2)]))));
   download(`${slug(S.t?.name || data?.tournament?.name)}-leaderboard.csv`, toCSV(rows));
 }
@@ -603,8 +683,8 @@ function exportLeaderboard() {
 function populateSelects() {
   const groups = S.t?.age_groups || [];
   const curAge = $('wAge').value;
-  $('wAge').innerHTML = groups.map(a => `<option>${esc(a)}</option>`).join('');
-  if (curAge) $('wAge').value = curAge;
+  $('wAge').innerHTML = '<option value="">Age/Division: automatic from age</option>' + groups.map(a => `<option value="${esc(a)}">${esc(a)} (set by hand)</option>`).join('');
+  $('wAge').value = curAge;
   const cur = $('species').value;
   $('species').innerHTML = S.species.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   if (cur) $('species').value = cur;
@@ -631,20 +711,41 @@ function takeCode() {
   return code;
 }
 
-function openWalkup() {
+function openWalkup() { openParticipantModal(null); }
+function openParticipantModal(id) {
   if (!S.t) return alert('Select or create a tournament first');
-  ['wName', 'wEmail', 'wPhone'].forEach(id => $(id).value = '');
-  populateSelects(); openModal('modal'); $('wName').focus();
+  const p = id ? S.participants.find(x => x.id === id) : null;
+  S.editingParticipant = p ? p.id : null;
+  populateSelects();
+  $('pmTitle').textContent = p ? `Edit ${p.participant_code || 'participant'}` : 'New Walk-up';
+  $('pmSave').textContent = p ? 'Save' : 'Create + Print Card';
+  $('wName').value = p?.display_name || ''; $('wYears').value = p?.age ?? '';
+  $('wEmail').value = p?.email || ''; $('wPhone').value = p?.phone || '';
+  $('wAge').value = p?.age_group_override ? p.age_group : '';
+  updateDivisionPreview(); openModal('modal'); $('wName').focus();
 }
-function createWalkup() {
+function readAge(v) { v = String(v ?? '').trim(); return /^\d{1,3}$/.test(v) && +v <= 120 ? parseInt(v, 10) : null; }
+function updateDivisionPreview() {
+  const el = $('wDivPreview'); if (!el) return;
+  if ($('wAge').value) { el.innerHTML = `<span class="text-amber-800">Age/Division set by hand: ${esc($('wAge').value)}</span>`; return; }
+  const age = readAge($('wYears').value), d = divisionForAge(S.t, age);
+  el.innerHTML = d ? `<span class="text-green-700">Age/Division: ${esc(d)}</span>`
+    : `<span class="text-red-700">⚠ ${age == null ? 'Enter an age to assign the Age/Division' : 'No Age/Division matches age ' + age}</span>`;
+}
+function saveParticipantModal() {
   const name = $('wName').value.trim(); if (!name) return;
-  const row = {
-    id: uuid(), tournament_id: S.tid, participant_code: takeCode(), display_name: name,
-    age_group: $('wAge').value || null, email: $('wEmail').value.trim() || null, phone: $('wPhone').value.trim() || null,
-    source: 'walkup', created_at: new Date().toISOString()
-  };
-  enqueue({ kind: 'insert', table: 'participants', row });
+  const yearsRaw = $('wYears').value.trim(), age = readAge(yearsRaw);
+  if (yearsRaw && age == null) return alert('Age must be a whole number from 0 to 120.');
+  const manual = $('wAge').value || null;
+  const fields = { display_name: name, age, age_group: manual || divisionForAge(S.t, age), age_group_override: !!manual,
+    email: $('wEmail').value.trim() || null, phone: $('wPhone').value.trim() || null };
   closeModal('modal');
+  if (S.editingParticipant) {
+    enqueue({ kind: 'update', table: 'participants', id: S.editingParticipant, patch: fields });
+    return;
+  }
+  const row = { id: uuid(), tournament_id: S.tid, participant_code: takeCode(), ...fields, source: 'walkup', created_at: new Date().toISOString() };
+  enqueue({ kind: 'insert', table: 'participants', row });
   if (row.participant_code) printParticipantCard(row);
   else alert('Saved. No reserved badge number was available on this laptop, so the number will be assigned when it syncs. Print the card from the list after that.');
   ensureCodePool();
@@ -654,16 +755,18 @@ function renderParticipants() {
   const el = $('participantList'); if (!el) return;
   if (!canReadData()) { el.innerHTML = '<p class="text-slate-500">Sign in as gate or admin staff.</p>'; return; }
   const f = $('partFilter').value.trim().toLowerCase();
-  const list = S.participants.filter(p => !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
+  const list = S.participants.filter(p => f === '!' ? !p.age_group : !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
     .sort((a, b) => (a.participant_code || 'z').localeCompare(b.participant_code || 'z'));
-  $('partCount').textContent = `${S.participants.length} registered`;
+  const noDiv = S.participants.filter(p => !p.age_group).length;
+  $('partCount').innerHTML = `${S.participants.length} registered` + (noDiv ? ` • <button class="text-red-700 underline" onclick="$('partFilter').value='!';renderParticipants()">${noDiv} without Age/Division</button>` : '');
   el.innerHTML = list.slice(0, 300).map(p => `
     <div class="flex justify-between items-center border rounded p-3 ${p._failed ? 'border-red-400' : ''}">
       <div>
         <div class="font-medium">${esc(p.display_name)} ${p._pending ? '<span class="text-xs text-amber-700">(not synced)</span>' : ''}</div>
-        <div class="text-sm text-slate-500">${esc(p.age_group)} • ID: ${esc(p.participant_code || 'pending')}</div>
+        <div class="text-sm text-slate-500">ID: ${esc(p.participant_code || 'pending')} • Age ${p.age ?? '—'} • ${divisionLabel(p)}</div>
       </div>
       <div class="flex gap-2">
+        <button onclick="openParticipantModal('${p.id}')" class="text-sm px-3 py-1 bg-slate-200 rounded">Edit</button>
         <button onclick="printParticipantCardById('${p.id}')" class="text-sm px-3 py-1 bg-blue-100 rounded" ${p.participant_code ? '' : 'disabled'}>Print Card</button>
       </div>
     </div>`).join('') + (list.length > 300 ? `<p class="text-xs text-slate-500">Showing 300 of ${list.length}. Use the filter.</p>` : '')
@@ -688,7 +791,7 @@ function printParticipantCard(p) {
   const card = `<div class="print-card">
       <div class="font-bold text-sm">${esc(S.t?.name || 'Tournament')}</div>
       <div class="text-lg font-bold mt-1">${esc(p.display_name)}</div>
-      <div class="text-xs mb-2">${esc(p.age_group)}</div>
+      <div class="text-xs mb-2">${esc(p.age_group || '')}${p.age != null ? ' • Age ' + p.age : ''}</div>
       <svg class="bc"></svg>
       <div class="qr mx-auto my-1" style="width:80px"></div>
       <div class="font-mono text-xs mt-1">${esc(p.participant_code)}</div>
@@ -726,7 +829,7 @@ function lookupParticipant() {
   if (!p) return msg('weighMsg', 'Participant not found: ' + code, false);
   S.currentParticipant = p;
   $('weighForm').classList.remove('hidden');
-  $('pInfo').textContent = `${p.display_name} • ${p.age_group || ''} • ${code}`;
+  $('pInfo').textContent = `${p.display_name} • ${p.age_group || 'No Age/Division'} • ${code}`;
   $('weighMsg').textContent = '';
   populateSelects();
   $('scanNum').value = ''; $('weightLbs').focus();
