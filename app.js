@@ -34,8 +34,26 @@ const S = {
   board: { data: null, version: null, tid: null, timer: null, at: null },
   displayIdx: 0, displayTimer: null
 };
-const params = new URLSearchParams(location.search);
+const params = new URLSearchParams(location.search); // as loaded; use urlParam() for the live URL
 const SCREEN_MODE = params.get('screen') === '1';
+const TAB_NAMES = ['setup', 'participants', 'weighin', 'leaderboard', 'display'];
+function urlParam(k) { return new URLSearchParams(location.search).get(k); }
+// The tab a shared link asks for: ?view=leaderboard (or a #board=… hash, which only exists on the leaderboard).
+function linkedView() {
+  const v = urlParam('view');
+  if (TAB_NAMES.includes(v)) return v;
+  // #board=… only exists on the leaderboard, and older shared public links were just ?t=<id>.
+  return /(^#|&)board=/.test(location.hash) || urlParam('t') ? 'leaderboard' : null;
+}
+// Keep ?t= and ?view= in the address bar in step with the app, so reloads and copied links land on the same screen.
+function syncUrl() {
+  const q = new URLSearchParams(location.search);
+  if (S.tid) q.set('t', S.tid);
+  if (S.tab && !SCREEN_MODE) q.set('view', S.tab);
+  const hash = S.tab === 'leaderboard' || SCREEN_MODE ? location.hash : '';
+  const url = location.pathname + (q.toString() ? '?' + q.toString() : '') + hash;
+  if (url !== location.pathname + location.search + location.hash) history.replaceState(null, '', url);
+}
 
 // ---------------------------------------------------------------- utils
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -255,15 +273,21 @@ function renderAuth() {
   const saved = LS.get('ift.stationRole', null);
   const role = roles.includes(saved) ? saved : (roles[0] || 'public');
   if (roles.length) rs.value = role;
-  applyRole(role, true);
+  // First render after page load: honour a shared link (?view=leaderboard / #board=…) if this mode can show it.
+  // After a real sign-in/out, go to the new mode's home screen.
+  const want = S.booted ? null : linkedView();
+  S.booted = true;
+  applyRole(role, true, want);
 }
-function applyRole(role, silent) {
+// Switching mode always opens that mode's home screen (every mode has the Leaderboard tab, so "keep the
+// current tab" made the mode picker look like it did nothing).
+function applyRole(role, silent, wantTab) {
   S.role = role || 'public';
   if (!silent && role !== 'public') LS.set('ift.stationRole', role);
   const allowed = ROLE_TABS[S.role] || ROLE_TABS.public;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('hidden', !allowed.includes(b.dataset.tab)));
   if (SCREEN_MODE) return showTab('display');
-  showTab(allowed.includes(S.tab) ? S.tab : allowed[0]);
+  showTab(allowed.includes(wantTab) ? wantTab : allowed[0]);
 }
 
 // ---------------------------------------------------------------- tournaments
@@ -282,8 +306,10 @@ async function loadTournamentList() {
   sel.innerHTML = S.tournaments.length
     ? S.tournaments.map(t => `<option value="${t.id}">${esc(t.name)} (${t.year})${t.status === 'active' ? ' • live' : ''}</option>`).join('')
     : '<option value="">No tournaments yet</option>';
-  const wanted = params.get('t') || LS.get('ift.tid', null);
-  const pick = S.tournaments.find(t => t.id === wanted) || S.tournaments.find(t => t.status === 'active') || S.tournaments[0];
+  // Keep the tournament already on screen (e.g. across sign-in), else the link's ?t=, else the last one picked here.
+  const byId = id => id && S.tournaments.find(t => t.id === id);
+  const pick = byId(S.tid) || byId(urlParam('t')) || byId(LS.get('ift.tid', null))
+    || S.tournaments.find(t => t.status === 'active') || S.tournaments[0];
   await selectTournament(pick ? pick.id : null);
 }
 
@@ -291,7 +317,8 @@ async function selectTournament(tid) {
   S.tid = tid || null;
   $('tournamentSelect').value = S.tid || '';
   if (S.tid) LS.set('ift.tid', S.tid);
-  S.board = { data: null, version: null, tid: S.tid, timer: S.board.timer, at: null };
+  syncUrl();
+  S.board = { data: null, version: null, tid: S.tid, timer: S.board.timer, at: null, gen: S.board.gen };
   S.t = null; S.species = []; S.configs = []; S.participants = []; S.catches = [];
   if (S.tid && S.roles.length) {
     loadCache();
@@ -382,6 +409,7 @@ function subscribeRealtime() {
 // ---------------------------------------------------------------- tabs
 function showTab(name) {
   S.tab = name;
+  syncUrl();
   document.querySelectorAll('.tab').forEach(t => t.classList.add('hidden'));
   $('tab-' + name)?.classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b => {
@@ -496,7 +524,7 @@ function fillSetupForm() {
   renderDivisionRows(divisionsOf(S.t, true));
   $('speciesList').value = S.species.map(s => s.name).join(', ');
   const base = location.origin + location.pathname;
-  $('publicLinks').innerHTML = `Public leaderboard: <a class="text-blue-700 underline" href="${base}?t=${S.t.id}" target="_blank">${esc(base)}?t=${S.t.id}</a><br>
+  $('publicLinks').innerHTML = `Public leaderboard: <a class="text-blue-700 underline" href="${base}?t=${S.t.id}&view=leaderboard" target="_blank">${esc(base)}?t=${S.t.id}&amp;view=leaderboard</a><br>
     Big screen (TV, no sign-in): <a class="text-blue-700 underline" href="${base}?t=${S.t.id}&screen=1" target="_blank">${esc(base)}?t=${S.t.id}&amp;screen=1</a>`;
 }
 async function saveTournament() {
@@ -1012,7 +1040,14 @@ function rowsHtml(rows, compact) {
 // Selected leaderboard tab lives in the URL hash (#board=<slug>) so it can be shared.
 function currentBoardSlug() { const m = location.hash.match(/board=([^&]+)/); return m ? decodeURIComponent(m[1]) : null; }
 function selectBoard(slugName) { history.replaceState(null, '', location.pathname + location.search + '#board=' + encodeURIComponent(slugName)); renderLeaderboard(); }
-window.addEventListener('hashchange', () => { if (S.tab === 'leaderboard') renderLeaderboard(); });
+window.addEventListener('hashchange', () => {
+  if (/(^#|&)board=/.test(location.hash) && S.tab !== 'leaderboard' && (ROLE_TABS[S.role] || ROLE_TABS.public).includes('leaderboard')) return showTab('leaderboard');
+  if (S.tab === 'leaderboard') renderLeaderboard();
+});
+window.addEventListener('popstate', () => {
+  const t = urlParam('t'); if (t && t !== S.tid && S.tournaments.some(x => x.id === t)) selectTournament(t);
+  const v = linkedView(); if (v && v !== S.tab && (ROLE_TABS[S.role] || ROLE_TABS.public).includes(v)) showTab(v);
+});
 function currentBoards() { return canReadData() && S.t ? computeBoards() : S.board.data; }
 
 function renderLeaderboard() {
@@ -1056,11 +1091,14 @@ async function pollBoard() {
 }
 function restartPolling() {
   clearTimeout(S.board.timer); S.board.timer = null;
+  const gen = S.board.gen = (S.board.gen || 0) + 1; // stops older loops still waiting on a request
   const needs = (S.tab === 'display') || (S.tab === 'leaderboard' && !canReadData());
   if (!needs || !S.tid) return;
   const secs = S.tab === 'display' ? CFG.screenPollSeconds : CFG.publicPollSeconds;
   const loop = async () => {
+    if (gen !== S.board.gen) return;
     await pollBoard();
+    if (gen !== S.board.gen) return;
     S.board.timer = setTimeout(loop, (secs + Math.random() * 5) * 1000); // jitter spreads load
   };
   loop();

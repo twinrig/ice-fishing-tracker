@@ -46,7 +46,10 @@ Things to know:
 
 **Public leaderboard on phones.** Each leaderboard (overall, big fish, each species, each Age/Division…) is its own tab;
 the tab row scrolls sideways on small screens. The selected tab is kept in the link (for example
-`…/?t=<tournament id>#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
+`…/?t=<tournament id>&view=leaderboard#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
+The address bar always holds the current tournament (`t=`) and screen (`view=`), so reloads and copied links open the same
+screen – even for signed-in staff. Older `?t=<id>` links open the leaderboard too. Switching mode (Admin / Gate / Weigh /
+Big Screen) jumps to that mode's main screen; the tournament picker at the top applies to every screen and is remembered.
 
 **Big screen URL (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&screen=1`.
 The admin Setup tab shows the exact links for the selected tournament.
