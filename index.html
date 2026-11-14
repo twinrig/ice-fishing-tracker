@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ice Fishing Tournament Tracker</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; }
+  .print-card, .print-ticket {
+    width: 2.4in; /* ~62mm for Brother QL-800 */
+    background: white;
+    border: 1px solid #ccc;
+    padding: 8px;
+    font-size: 11px;
+    text-align: center;
+  }
+  .print-card { height: 3.5in; }
+  .print-ticket { height: 2.2in; }
+  @media print {
+    body * { visibility: hidden; }
+    .print-area, .print-area * { visibility: visible; }
+    .print-area { position: absolute; left: 0; top: 0; }
+  }
+</style>
+</head>
+<body class="bg-slate-100 text-slate-900">
+<div class="max-w-6xl mx-auto p-4">
+  <header class="mb-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold text-blue-900">Ice Fishing Tracker</h1>
+    <div class="flex items-center gap-3">
+      <select id="roleSelect" onchange="setRole()" class="border rounded px-2 py-1 text-sm">
+        <option value="checkin" selected>Check-in / Gate</option>
+        <option value="weigh">Weigh Station</option>
+        <option value="admin">Admin</option>
+        <option value="display">Big Screen</option>
+      </select>
+      <span id="roleBadge" class="text-sm bg-blue-100 px-3 py-1 rounded-full">Admin</span>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="flex gap-2 mb-4 border-b text-sm" id="mainNav">
+    <button data-tab="setup" onclick="showTab('setup')" class="tab-btn admin-only px-3 py-2 hidden">Setup</button>
+    <button data-tab="participants" onclick="showTab('participants')" class="tab-btn px-3 py-2">Participants</button>
+    <button data-tab="weighin" onclick="showTab('weighin')" class="tab-btn px-3 py-2">Weigh-in</button>
+    <button data-tab="leaderboard" onclick="showTab('leaderboard')" class="tab-btn px-3 py-2">Leaderboard</button>
+    <button data-tab="display" onclick="showTab('display')" class="tab-btn admin-only px-3 py-2 hidden">Big Screen</button>
+  </nav>
+
+  <!-- SETUP -->
+  <section id="tab-setup" class="tab hidden">
+    <div class="bg-white rounded-xl shadow p-6">
+      <h2 class="text-xl font-semibold mb-4">Tournament Setup</h2>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium">Tournament Name</label>
+          <input id="tName" class="w-full border rounded px-3 py-2" value="Winter Classic 2026">
+        </div>
+        <div>
+          <label class="block text-sm font-medium">Year <span class="text-red-600">*</span></label>
+          <input id="tYear" type="number" min="2020" max="2100" class="w-full border rounded px-3 py-2" value="2026" required>
+        </div>
+        <div>
+          <label class="block text-sm font-medium">Age Groups (comma separated)</label>
+          <input id="ageGroups" class="w-full border rounded px-3 py-2" value="Youth, Adult, Senior">
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-sm font-medium">Species (comma separated)</label>
+          <input id="speciesList" class="w-full border rounded px-3 py-2" value="Walleye, Perch, Pike, Crappie">
+        </div>
+      </div>
+      <button onclick="saveTournament()" class="mt-4 bg-blue-600 text-white px-5 py-2 rounded-lg">Save Tournament</button>
+      <div id="setupMsg" class="mt-3 text-green-700"></div>
+
+      <hr class="my-6">
+
+      <h3 class="font-semibold mb-2">Load Existing Tournament</h3>
+      <select id="tournamentList" class="w-full border rounded px-3 py-2 mb-3"></select>
+      <button onclick="loadSelectedTournament()" class="bg-slate-700 text-white px-5 py-2 rounded-lg">Load Selected</button>
+      <div id="loadMsg" class="mt-2 text-sm"></div>
+
+      <hr class="my-6">
+
+      <h3 class="font-semibold mb-2">Import Pre-registered Participants</h3>
+      <p class="text-sm text-slate-600 mb-3">Upload a CSV with columns: <code>name, ageGroup</code> (optional: email, phone). Year and sequential numbers will be assigned automatically.</p>
+      <input type="file" id="csvFile" accept=".csv,text/csv" class="block mb-3 text-sm">
+      <button onclick="importCSV()" class="bg-green-600 text-white px-5 py-2 rounded-lg">Import CSV</button>
+      <div id="importMsg" class="mt-3 text-sm"></div>
+    </div>
+  </section>
+
+  <!-- PARTICIPANTS / CHECK-IN -->
+  <section id="tab-participants" class="tab">
+    <div class="bg-white rounded-xl shadow p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-semibold">Participants <span class="text-sm font-normal text-slate-500">(Check-in)</span></h2>
+        <button onclick="openWalkup()" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm">+ Walk-up</button>
+      </div>
+
+      <!-- Lookup / Check-in -->
+      <div class="mb-6 p-4 bg-slate-50 rounded-lg">
+        <label class="block text-sm font-medium mb-2">Scan or type to Check In</label>
+        <div class="flex items-center gap-1">
+          <input id="checkYear" class="w-20 border rounded px-3 py-2 text-lg bg-slate-50" readonly>
+          <span class="text-xl font-mono">_</span>
+          <input id="checkNum" class="flex-1 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" onkeydown="if(event.key==='Enter') checkInLookup()" autofocus>
+          <button onclick="checkInLookup()" class="bg-blue-600 text-white px-4 py-2 rounded">Check In</button>
+        </div>
+        <div id="checkInResult" class="mt-2 text-sm"></div>
+      </div>
+
+      <div id="participantList" class="space-y-3"></div>
+    </div>
+  </section>
+
+  <!-- WEIGH-IN -->
+  <section id="tab-weighin" class="tab hidden">
+    <div class="bg-white rounded-xl shadow p-6 max-w-lg">
+      <h2 class="text-xl font-semibold mb-4">Weigh-in Station</h2>
+      <label class="block text-sm font-medium">Scan or type Participant Number</label>
+      <div class="flex items-center gap-1 mb-3">
+        <input id="scanYear" class="w-20 border rounded px-3 py-2 text-lg bg-slate-50" readonly>
+        <span class="text-xl font-mono">_</span>
+        <input id="scanNum" class="flex-1 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" maxlength="12" onkeydown="if(event.key==='Enter') lookupParticipant()" autofocus>
+      </div>
+      <button onclick="lookupParticipant()" class="bg-blue-600 text-white px-4 py-2 rounded mb-4">Look Up</button>
+      <div id="weighForm" class="hidden space-y-3">
+        <div id="pInfo" class="bg-slate-50 p-3 rounded font-medium"></div>
+        <select id="species" class="w-full border rounded px-3 py-2"></select>
+        <div class="flex gap-2">
+          <input id="weightLbs" type="number" min="0" step="1" placeholder="Lbs" class="w-1/2 border rounded px-3 py-2">
+          <input id="weightOz" type="number" min="0" max="15" step="0.1" placeholder="Oz" class="w-1/2 border rounded px-3 py-2">
+        </div>
+        <input id="length" type="number" step="0.1" placeholder="Length (in)" class="w-full border rounded px-3 py-2">
+        <input id="initials" placeholder="Staff Initials" class="w-full border rounded px-3 py-2">
+        <button onclick="submitWeighIn()" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold">Submit & Print Ticket</button>
+      </div>
+      <div id="ticketPreview" class="mt-6 hidden"></div>
+    </div>
+  </section>
+
+  <!-- LEADERBOARD -->
+  <section id="tab-leaderboard" class="tab hidden">
+    <div class="bg-white rounded-xl shadow p-6">
+      <div class="flex gap-2 mb-4">
+        <button onclick="showBoard('overall')" class="board-btn bg-blue-600 text-white px-3 py-1 rounded">Overall</button>
+        <button onclick="showBoard('species')" class="board-btn bg-slate-200 px-3 py-1 rounded">By Species</button>
+        <button onclick="showBoard('age')" class="board-btn bg-slate-200 px-3 py-1 rounded">By Age Group</button>
+      </div>
+      <div id="boardContent"></div>
+    </div>
+  </section>
+
+  <!-- BIG SCREEN -->
+  <section id="tab-display" class="tab hidden">
+    <div class="bg-black text-white rounded-xl p-8 min-h-[70vh]">
+      <div class="text-center text-4xl font-bold mb-6" id="displayTitle">LIVE LEADERBOARD</div>
+      <div id="displayBoard" class="text-2xl space-y-2"></div>
+    </div>
+  </section>
+</div>
+
+<!-- Walk-up Modal -->
+<div id="modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+  <div class="bg-white rounded-xl p-6 w-full max-w-md">
+    <h3 class="text-lg font-semibold mb-4">New Walk-up</h3>
+    <input id="wName" placeholder="Full Name" class="w-full border rounded px-3 py-2 mb-3">
+    <select id="wAge" class="w-full border rounded px-3 py-2 mb-4"></select>
+    <div class="flex gap-2">
+      <button onclick="createWalkup()" class="flex-1 bg-green-600 text-white py-2 rounded">Create + Print Card</button>
+      <button onclick="closeModal()" class="px-4 py-2 border rounded">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Admin Password Modal -->
+<div id="adminModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+  <div class="bg-white rounded-xl p-6 w-full max-w-sm">
+    <h3 class="text-lg font-semibold mb-4">Admin Password</h3>
+    <input id="adminPw" type="password" placeholder="Password" class="w-full border rounded px-3 py-2 mb-4" onkeydown="if(event.key==='Enter') checkAdminPassword()">
+    <div class="flex gap-2">
+      <button onclick="checkAdminPassword()" class="flex-1 bg-blue-600 text-white py-2 rounded">Enter</button>
+      <button onclick="cancelAdmin()" class="px-4 py-2 border rounded">Cancel</button>
+    </div>
+    <div id="adminPwMsg" class="mt-2 text-sm text-red-600"></div>
+  </div>
+</div>
+
+<!-- Print Preview Modal -->
+<div id="printPreviewModal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="bg-white rounded-xl p-6 max-w-sm">
+    <h3 class="font-semibold mb-3">Print Preview</h3>
+    <div id="printPreviewContent" class="border p-2 mb-4"></div>
+    <div class="flex gap-2">
+      <button onclick="doPrint()" class="flex-1 bg-blue-600 text-white py-2 rounded">Print</button>
+      <button onclick="closePrintPreview()" class="px-4 py-2 border rounded">Close</button>
+    </div>
+    <p class="text-xs text-slate-500 mt-2">If the print dialog is blocked, use your browser’s print or screenshot this preview.</p>
+  </div>
+</div>
+
+<script>
+var tournament = null;
+var participants = [];
+var weighIns = [];
+var currentParticipant = null;
+var storageAvailable = false;
+var tournaments = {}; // id -> full tournament data
+var currentTournamentId = null;
+var adminUnlocked = false;
+
+// Safe storage helpers
+function loadData() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      tournaments = JSON.parse(localStorage.getItem('tournaments')) || {};
+      currentTournamentId = localStorage.getItem('currentTournamentId');
+      if (currentTournamentId && tournaments[currentTournamentId]) {
+        loadTournamentIntoMemory(currentTournamentId);
+      }
+      storageAvailable = true;
+    }
+  } catch (e) {
+    console.warn('localStorage unavailable, using in-memory storage');
+    storageAvailable = false;
+  }
+}
+
+function save() {
+  // Always keep the in-memory copy up to date
+  if (currentTournamentId && tournament) {
+    tournaments[currentTournamentId] = {
+      tournament: JSON.parse(JSON.stringify(tournament)),
+      participants: JSON.parse(JSON.stringify(participants)),
+      weighIns: JSON.parse(JSON.stringify(weighIns))
+    };
+  }
+  if (!storageAvailable) {
+    updateStorageStatus();
+    return;
+  }
+  try {
+    localStorage.setItem('tournaments', JSON.stringify(tournaments));
+    if (currentTournamentId) localStorage.setItem('currentTournamentId', currentTournamentId);
+  } catch (e) {
+    storageAvailable = false;
+  }
+  updateStorageStatus();
+}
+
+function updateStorageStatus() {
+  let el = document.getElementById('storageStatus');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'storageStatus';
+    el.className = 'text-xs text-slate-500 mt-1';
+    const header = document.querySelector('header');
+    if (header) header.appendChild(el);
+  }
+  el.textContent = storageAvailable
+    ? 'Storage: browser (persists)'
+    : 'Storage: in-memory only (sandbox – data lasts until refresh)';
+}
+
+function loadTournamentIntoMemory(id) {
+  const data = tournaments[id];
+  if (!data) return;
+  tournament = data.tournament;
+  participants = data.participants || [];
+  weighIns = data.weighIns || [];
+  currentTournamentId = id;
+}
+
+// Load from storage after DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+  try {
+    loadData();
+    updateStorageStatus();
+    const roleSelect = document.getElementById('roleSelect');
+    if (roleSelect) {
+      roleSelect.value = 'admin';
+      setRole();
+    }
+  } catch (err) {
+    console.error('Startup error:', err);
+  }
+});
+
+function setRole() {
+  const roleSelect = document.getElementById('roleSelect');
+  if (!roleSelect) return;
+  const role = roleSelect.value;
+  if (role === 'admin' && !adminUnlocked) {
+    const modal = document.getElementById('adminModal');
+    const pwInput = document.getElementById('adminPw');
+    const msg = document.getElementById('adminPwMsg');
+    if (pwInput) pwInput.value = '';
+    if (msg) msg.textContent = '';
+    if (modal) modal.classList.remove('hidden');
+    if (pwInput) pwInput.focus();
+    return;
+  }
+  applyRole(role);
+}
+
+function checkAdminPassword() {
+  const pwInput = document.getElementById('adminPw');
+  const pw = pwInput ? pwInput.value : '';
+  const modal = document.getElementById('adminModal');
+  const msg = document.getElementById('adminPwMsg');
+  if (pw === 'test1234') {
+    adminUnlocked = true;
+    if (modal) modal.classList.add('hidden');
+    applyRole('admin');
+    populateTournamentList();
+  } else {
+    if (msg) msg.textContent = 'Incorrect password';
+    if (pwInput) {
+      pwInput.value = '';
+      pwInput.focus();
+    }
+  }
+}
+
+function cancelAdmin() {
+  const modal = document.getElementById('adminModal');
+  const roleSelect = document.getElementById('roleSelect');
+  if (modal) modal.classList.add('hidden');
+  if (roleSelect) roleSelect.value = 'checkin';
+  applyRole('checkin');
+}
+
+function applyRole(role) {
+  if (role !== 'admin') adminUnlocked = false;
+
+  const visibility = {
+    admin: ['setup', 'participants', 'weighin', 'leaderboard', 'display'],
+    checkin: ['participants', 'leaderboard'],
+    weigh: ['weighin', 'leaderboard'],
+    display: ['display', 'leaderboard']
+  };
+  const allowed = visibility[role] || [];
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const tab = btn.dataset.tab;
+    btn.classList.toggle('hidden', !allowed.includes(tab));
+  });
+
+  const badge = document.getElementById('roleBadge');
+  if (badge) {
+    badge.textContent = {
+      checkin: 'Check-in / Gate',
+      weigh: 'Weigh Station',
+      admin: 'Admin',
+      display: 'Big Screen'
+    }[role] || role;
+  }
+
+  if (allowed.length) showTab(allowed[0]);
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.add('hidden'));
+  const tabEl = document.getElementById('tab-' + name);
+  if (tabEl) tabEl.classList.remove('hidden');
+
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'font-medium', 'text-blue-700', 'bg-transparent');
+    b.classList.add('text-slate-600', 'hover:bg-slate-100');
+    if (b.dataset.tab === name && !b.classList.contains('hidden')) {
+      b.classList.remove('text-slate-600', 'hover:bg-slate-100');
+      b.classList.add('bg-blue-600', 'text-white', 'font-medium', 'rounded-t');
+    }
+  });
+
+  if (name === 'participants') {
+    renderParticipants();
+    updateCheckInPrefill();
+  }
+  if (name === 'leaderboard') showBoard('overall');
+  if (name === 'display') startDisplay();
+  if (name === 'weighin') updateWeighInPrefill();
+}
+
+function importCSV() {
+  const fileInput = document.getElementById('csvFile');
+  const file = fileInput.files[0];
+  const msg = document.getElementById('importMsg');
+  if (!file) {
+    msg.textContent = 'Please select a CSV file.';
+    msg.className = 'mt-3 text-sm text-red-600';
+    return;
+  }
+  if (!tournament || !tournament.year) {
+    msg.textContent = 'Save the tournament (with year) first.';
+    msg.className = 'mt-3 text-sm text-red-600';
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) {
+      msg.textContent = 'CSV appears empty or missing header.';
+      msg.className = 'mt-3 text-sm text-red-600';
+      return;
+    }
+
+    // Simple CSV parse (handles basic quoted fields)
+    const parseLine = (line) => {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') {
+          inQuotes = !inQuotes;
+        } else if (c === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += c;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    };
+
+    const headers = parseLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z]/g, ''));
+    const nameIdx = headers.findIndex(h => h.includes('name'));
+    const ageIdx = headers.findIndex(h => h.includes('age') || h.includes('group'));
+
+    if (nameIdx === -1) {
+      msg.textContent = 'CSV must have a "name" column.';
+      msg.className = 'mt-3 text-sm text-red-600';
+      return;
+    }
+
+    let added = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseLine(lines[i]);
+      const name = cols[nameIdx];
+      if (!name) continue;
+      const ageGroup = ageIdx >= 0 ? (cols[ageIdx] || tournament.ageGroups[0]) : tournament.ageGroups[0];
+
+      const seq = String(tournament.nextSeq || 1).padStart(5, '0');
+      const id = tournament.year + '_' + seq;
+      tournament.nextSeq = (tournament.nextSeq || 1) + 1;
+
+      participants.push({
+        id,
+        name,
+        ageGroup,
+        checkIn: 'not_arrived',
+        qr: id
+      });
+      added++;
+    }
+
+    save();
+    renderParticipants();
+    msg.textContent = `Imported ${added} participants.`;
+    msg.className = 'mt-3 text-sm text-green-700';
+    fileInput.value = '';
+  };
+  reader.readAsText(file);
+}
+
+function saveTournament() {
+  const year = document.getElementById('tYear').value;
+  if (!year) {
+    alert('Year is required');
+    return;
+  }
+  const name = document.getElementById('tName').value.trim() || 'Untitled';
+  if (!currentTournamentId) {
+    currentTournamentId = 'T' + Date.now();
+  }
+  tournament = {
+    id: currentTournamentId,
+    name,
+    year,
+    ageGroups: document.getElementById('ageGroups').value.split(',').map(s => s.trim()),
+    species: document.getElementById('speciesList').value.split(',').map(s => s.trim()),
+    nextSeq: tournament?.nextSeq || 1
+  };
+  save();
+  document.getElementById('setupMsg').textContent = 'Tournament saved!';
+  populateSelects();
+  updateWeighInPrefill();
+  populateTournamentList();
+}
+
+function populateTournamentList() {
+  const sel = document.getElementById('tournamentList');
+  if (!sel) return;
+  const ids = Object.keys(tournaments);
+  sel.innerHTML = ids.length
+    ? ids.map(id => {
+        const t = tournaments[id].tournament;
+        return `<option value="${id}">${t.name} (${t.year})</option>`;
+      }).join('')
+    : '<option value="">No saved tournaments</option>';
+  if (currentTournamentId) sel.value = currentTournamentId;
+}
+
+function loadSelectedTournament() {
+  const id = document.getElementById('tournamentList').value;
+  if (!id || !tournaments[id]) {
+    document.getElementById('loadMsg').textContent = 'Select a tournament first.';
+    return;
+  }
+  loadTournamentIntoMemory(id);
+  // Fill form
+  document.getElementById('tName').value = tournament.name;
+  document.getElementById('tYear').value = tournament.year;
+  document.getElementById('ageGroups').value = tournament.ageGroups.join(', ');
+  document.getElementById('speciesList').value = tournament.species.join(', ');
+  populateSelects();
+  updateWeighInPrefill();
+  renderParticipants();
+  document.getElementById('loadMsg').textContent = `Loaded: ${tournament.name}`;
+  document.getElementById('setupMsg').textContent = '';
+  save();
+}
+
+function populateSelects() {
+  if (!tournament) return;
+  const ageSel = document.getElementById('wAge');
+  const specSel = document.getElementById('species');
+  if (ageSel) ageSel.innerHTML = tournament.ageGroups.map(a => `<option>${a}</option>`).join('');
+  if (specSel) specSel.innerHTML = tournament.species.map(s => `<option>${s}</option>`).join('');
+}
+
+function openWalkup() {
+  if (!tournament) return alert('Create a tournament first');
+  const modal = document.getElementById('modal');
+  if (modal) modal.classList.remove('hidden');
+  populateSelects();
+}
+function closeModal() {
+  const modal = document.getElementById('modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function createWalkup() {
+  const name = document.getElementById('wName').value.trim();
+  if (!name) return;
+  if (!tournament || !tournament.year) {
+    alert('Set tournament year first');
+    return;
+  }
+  const seq = String(tournament.nextSeq || 1).padStart(5, '0');
+  const id = tournament.year + '_' + seq;
+  tournament.nextSeq = (tournament.nextSeq || 1) + 1;
+  const p = {
+    id,
+    name,
+    ageGroup: document.getElementById('wAge').value,
+    checkIn: 'arrived',
+    qr: id
+  };
+  participants.push(p);
+  save();
+  closeModal();
+  renderParticipants();
+  printParticipantCard(p);
+}
+
+function renderParticipants() {
+  const el = document.getElementById('participantList');
+  el.innerHTML = participants.map(p => `
+    <div class="flex justify-between items-center border rounded p-3">
+      <div>
+        <div class="font-medium">${p.name}</div>
+        <div class="text-sm text-slate-500">${p.ageGroup} • ID: ${p.id} • <span class="${p.checkIn==='arrived'?'text-green-600':'text-amber-600'}">${p.checkIn.replace('_',' ')}</span></div>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="toggleCheckIn('${p.id}')" class="text-sm px-3 py-1 bg-slate-200 rounded">Toggle Check-in</button>
+        <button onclick="printParticipantCardById('${p.id}')" class="text-sm px-3 py-1 bg-blue-100 rounded">Print Card</button>
+      </div>
+    </div>
+  `).join('') || '<p class="text-slate-500">No participants yet. Add a walk-up or import later.</p>';
+}
+
+function toggleCheckIn(id) {
+  const p = participants.find(x => x.id === id);
+  p.checkIn = p.checkIn === 'arrived' ? 'not_arrived' : 'arrived';
+  save();
+  renderParticipants();
+}
+
+function printParticipantCardById(id) {
+  const p = participants.find(x => x.id === id);
+  printParticipantCard(p);
+}
+
+function showPrintPreview(html) {
+  const modal = document.getElementById('printPreviewModal');
+  const content = document.getElementById('printPreviewContent');
+  const area = document.getElementById('printArea');
+  if (content) content.innerHTML = html;
+  if (area) area.innerHTML = html;
+  if (modal) modal.classList.remove('hidden');
+}
+
+function doPrint() {
+  try {
+    window.print();
+  } catch (e) {
+    alert('Print dialog blocked in this environment. You can screenshot the preview or use your browser menu.');
+  }
+}
+
+function closePrintPreview() {
+  const modal = document.getElementById('printPreviewModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function printParticipantCard(p) {
+  const html = `
+    <div class="print-card">
+      <div class="font-bold text-sm">${tournament?.name || 'Tournament'}</div>
+      <div class="text-lg font-bold mt-1">${p.name}</div>
+      <div class="text-xs mb-2">${p.ageGroup}</div>
+      <svg id="barcodePrev"></svg>
+      <div id="qrcodePrev" class="mx-auto my-1" style="width:80px"></div>
+      <div class="font-mono text-xs mt-1">${p.id}</div>
+    </div>
+  `;
+  showPrintPreview(html);
+  setTimeout(() => {
+    if (typeof JsBarcode !== 'undefined') {
+      try { JsBarcode("#barcodePrev", p.id, { format: "CODE128", width: 1.5, height: 40, displayValue: false }); } catch(e){}
+    }
+    if (typeof QRCode !== 'undefined' && document.getElementById("qrcodePrev")) {
+      try { new QRCode(document.getElementById("qrcodePrev"), { text: p.id, width: 80, height: 80 }); } catch(e){}
+    }
+  }, 50);
+}
+
+function lookupParticipant() {
+  let year = document.getElementById('scanYear').value;
+  let num = document.getElementById('scanNum').value.trim();
+  
+  // If they scanned or pasted a full ID (yyyy_#####)
+  if (num.includes('_')) {
+    const parts = num.split('_');
+    year = parts[0];
+    num = parts[1] || '';
+  }
+  
+  num = num.padStart(5, '0');
+  if (!year || !num || num === '00000') return alert('Enter the participant number');
+  const id = year + '_' + num;
+  currentParticipant = participants.find(p => p.id === id);
+  if (!currentParticipant) return alert('Participant not found: ' + id);
+  const form = document.getElementById('weighForm');
+  if (form) form.classList.remove('hidden');
+  document.getElementById('pInfo').innerHTML = `${currentParticipant.name} • ${currentParticipant.ageGroup} • ${id}`;
+  populateSelects();
+  document.getElementById('scanNum').value = '';
+  document.getElementById('scanNum').focus();
+}
+
+function updateWeighInPrefill() {
+  if (tournament && tournament.year) {
+    const el = document.getElementById('scanYear');
+    if (el) el.value = tournament.year;
+  }
+}
+
+function updateCheckInPrefill() {
+  if (tournament && tournament.year) {
+    const el = document.getElementById('checkYear');
+    if (el) el.value = tournament.year;
+  }
+}
+
+function checkInLookup() {
+  let year = document.getElementById('checkYear').value;
+  let num = document.getElementById('checkNum').value.trim();
+  const result = document.getElementById('checkInResult');
+
+  if (num.includes('_')) {
+    const parts = num.split('_');
+    year = parts[0];
+    num = parts[1] || '';
+  }
+  num = num.padStart(5, '0');
+  if (!year || !num || num === '00000') {
+    result.textContent = 'Enter a participant number';
+    result.className = 'mt-2 text-sm text-red-600';
+    return;
+  }
+  const id = year + '_' + num;
+  const p = participants.find(x => x.id === id);
+  if (!p) {
+    result.textContent = 'Not found: ' + id;
+    result.className = 'mt-2 text-sm text-red-600';
+    return;
+  }
+  p.checkIn = 'arrived';
+  save();
+  renderParticipants();
+  result.textContent = `Checked in: ${p.name} (${p.ageGroup})`;
+  result.className = 'mt-2 text-sm text-green-700';
+  document.getElementById('checkNum').value = '';
+  document.getElementById('checkNum').focus();
+}
+
+function submitWeighIn() {
+  if (!currentParticipant) return;
+  const lbs = parseFloat(document.getElementById('weightLbs').value) || 0;
+  const oz = parseFloat(document.getElementById('weightOz').value) || 0;
+  const totalLbs = lbs + (oz / 16);
+  const w = {
+    id: 'W' + Date.now().toString().slice(-6),
+    participantId: currentParticipant.id,
+    species: document.getElementById('species').value,
+    weightLbs: lbs,
+    weightOz: oz,
+    weight: totalLbs, // decimal lbs for sorting/totals
+    length: parseFloat(document.getElementById('length').value) || 0,
+    initials: document.getElementById('initials').value || '—',
+    time: new Date().toLocaleTimeString(),
+    status: 'active'
+  };
+  weighIns.push(w);
+  save();
+  printWeighTicket(currentParticipant, w);
+  document.getElementById('weightLbs').value = '';
+  document.getElementById('weightOz').value = '';
+  document.getElementById('length').value = '';
+  const form = document.getElementById('weighForm');
+  if (form) form.classList.add('hidden');
+}
+
+function printWeighTicket(p, w) {
+  const html = `
+    <div class="print-ticket">
+      <div class="font-bold text-xs">WEIGH TICKET</div>
+      <div class="font-bold">${p.name}</div>
+      <div>${w.species}</div>
+      <div class="text-lg font-bold">${w.weightLbs} lb ${w.weightOz} oz</div>
+      <div>${w.length}" • ${w.time}</div>
+      <div class="text-xs">Staff: ${w.initials}</div>
+      <div class="font-mono text-xs mt-1">${w.id}</div>
+    </div>
+  `;
+  showPrintPreview(html);
+}
+
+function formatWeight(decimalLbs) {
+  const lbs = Math.floor(decimalLbs);
+  const oz = ((decimalLbs - lbs) * 16).toFixed(1);
+  return `${lbs} lb ${oz} oz`;
+}
+
+function showBoard(type) {
+  document.querySelectorAll('.board-btn').forEach(b => {
+    b.className = 'board-btn bg-slate-200 px-3 py-1 rounded';
+  });
+  if (event && event.target) event.target.className = 'board-btn bg-blue-600 text-white px-3 py-1 rounded';
+
+  const active = weighIns.filter(w => w.status === 'active');
+  const byParticipant = {};
+  active.forEach(w => {
+    if (!byParticipant[w.participantId]) byParticipant[w.participantId] = { weight: 0, fish: [] };
+    byParticipant[w.participantId].weight += w.weight;
+    byParticipant[w.participantId].fish.push(w);
+  });
+
+  let html = '';
+  if (type === 'overall') {
+    const ranked = Object.entries(byParticipant)
+      .map(([pid, data]) => ({ ...participants.find(p => p.id === pid), total: data.weight }))
+      .filter(p => p.name)
+      .sort((a,b) => b.total - a.total);
+    html = ranked.map((p,i) => `<div class="flex justify-between py-2 border-b"><span>${i+1}. ${p.name} (${p.ageGroup})</span><span class="font-bold">${formatWeight(p.total)}</span></div>`).join('');
+  } else if (type === 'species' && tournament) {
+    tournament.species.forEach(sp => {
+      const list = active.filter(w => w.species === sp);
+      const ranked = {};
+      list.forEach(w => ranked[w.participantId] = (ranked[w.participantId] || 0) + w.weight);
+      const sorted = Object.entries(ranked).sort((a,b) => b[1]-a[1]).slice(0,5);
+      html += `<h3 class="font-semibold mt-4">${sp}</h3>`;
+      html += sorted.map(([pid, tot], i) => {
+        const p = participants.find(x => x.id === pid);
+        return `<div>${i+1}. ${p?.name || '?'} — ${formatWeight(tot)}</div>`;
+      }).join('') || '<div class="text-sm text-slate-500">No fish yet</div>';
+    });
+  } else if (type === 'age' && tournament) {
+    tournament.ageGroups.forEach(ag => {
+      const pids = participants.filter(p => p.ageGroup === ag).map(p => p.id);
+      const subset = Object.entries(byParticipant).filter(([pid]) => pids.includes(pid));
+      const ranked = subset.map(([pid, d]) => ({ name: participants.find(p=>p.id===pid)?.name, total: d.weight })).sort((a,b)=>b.total-a.total);
+      html += `<h3 class="font-semibold mt-4">${ag}</h3>`;
+      html += ranked.map((p,i) => `<div>${i+1}. ${p.name} — ${formatWeight(p.total)}</div>`).join('') || '<div class="text-sm text-slate-500">No fish</div>';
+    });
+  }
+  const content = html || '<p>No weigh-ins yet.</p>';
+  document.getElementById('boardContent').innerHTML = content;
+  if (document.getElementById('displayBoard')) {
+    document.getElementById('displayBoard').innerHTML = content;
+  }
+}
+
+let displayInterval;
+function startDisplay() {
+  clearInterval(displayInterval);
+  const boards = ['overall', 'species', 'age'];
+  let i = 0;
+  const cycle = () => {
+    const type = boards[i % boards.length];
+    showBoard(type);
+    document.getElementById('displayTitle').textContent = type.toUpperCase() + ' LEADERBOARD';
+    i++;
+  };
+  cycle();
+  displayInterval = setInterval(cycle, 8000);
+}
+
+// Init is now handled in DOMContentLoaded above
+</script>
+</body>
+</html>
