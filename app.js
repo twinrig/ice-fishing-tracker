@@ -469,9 +469,18 @@ async function saveTournament() {
   msg('setupMsg', 'Tournament saved!' + (problems.length ? ' Note: ' + problems.join('; ') : ''), !problems.length);
 }
 
+// Special picker values for species / age-group boards with no single species / group chosen.
+const SPLIT_OPTS = { '': 'tabs', '__grouped__': 'grouped', '__combined__': 'combined' };
 function boardFilterOptions(c) {
-  if (c.board_type === 'species') return `<option value="">Each species (one board per species)</option><option value="__all__" ${c.all_species ? 'selected' : ''}>All species (combined)</option>` + S.species.map(s => `<option value="${s.id}" ${c.species_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
-  if (c.board_type === 'age_group') return `<option value="">Each age group</option>` + (S.t?.age_groups || []).map(g => `<option value="${esc(g)}" ${c.age_group === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
+  const mode = c.split_mode || 'tabs';
+  const special = (each, all, any, hasFilter) =>
+    `<option value="" ${!hasFilter && mode === 'tabs' ? 'selected' : ''}>${each}</option>` +
+    `<option value="__grouped__" ${!hasFilter && mode === 'grouped' ? 'selected' : ''}>${all}</option>` +
+    `<option value="__combined__" ${!hasFilter && mode === 'combined' ? 'selected' : ''}>${any}</option>`;
+  if (c.board_type === 'species') return special('Each species (separate tabs)', 'All species, grouped on one board', 'Any species, combined ranking', !!c.species_id)
+    + S.species.map(s => `<option value="${s.id}" ${c.species_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  if (c.board_type === 'age_group') return special('Each age group / division (separate tabs)', 'All age groups / divisions, grouped on one board', 'Any age group / division, combined ranking', !!c.age_group)
+    + (S.t?.age_groups || []).map(g => `<option value="${esc(g)}" ${c.age_group === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
   return '<option value="">All anglers</option>';
 }
 function renderConfigs() {
@@ -483,7 +492,7 @@ function renderConfigs() {
       <input class="cf-order border rounded px-2 py-1 w-14" type="number" value="${c.sort_order}" title="Order">
       <input class="cf-title border rounded px-2 py-1 flex-1 min-w-[10rem]" value="${esc(c.title)}">
       <select class="cf-type border rounded px-2 py-1" onchange="this.closest('[data-id]').querySelector('.cf-filter').innerHTML = boardFilterOptions({ board_type: this.value })">
-        ${['overall', 'species', 'age_group'].map(t => `<option value="${t}" ${c.board_type === t ? 'selected' : ''}>${{ overall: 'Overall', species: 'Species', age_group: 'Age group' }[t]}</option>`).join('')}
+        ${['overall', 'species', 'age_group'].map(t => `<option value="${t}" ${c.board_type === t ? 'selected' : ''}>${{ overall: 'Overall', species: 'Species', age_group: 'Age group / Division' }[t]}</option>`).join('')}
       </select>
       <select class="cf-filter border rounded px-2 py-1">${filterOpts(c)}</select>
       <select class="cf-scoring border rounded px-2 py-1">
@@ -498,13 +507,14 @@ function renderConfigs() {
 }
 async function saveBoardConfig(id) {
   const row = document.querySelector(`[data-id="${id}"]`);
-  const type = row.querySelector('.cf-type').value, filter = row.querySelector('.cf-filter').value || null;
+  const type = row.querySelector('.cf-type').value, raw = row.querySelector('.cf-filter').value;
+  const special = raw in SPLIT_OPTS, filter = special ? null : raw;
   const patch = {
     title: row.querySelector('.cf-title').value.trim() || 'Leaderboard', board_type: type,
     scoring: row.querySelector('.cf-scoring').value, top_n: parseInt(row.querySelector('.cf-top').value, 10) || 10,
     sort_order: parseInt(row.querySelector('.cf-order').value, 10) || 0, enabled: row.querySelector('.cf-enabled').checked,
-    all_species: type === 'species' && filter === '__all__',
-    species_id: type === 'species' && filter !== '__all__' ? filter : null, age_group: type === 'age_group' ? filter : null
+    split_mode: type !== 'overall' && special ? SPLIT_OPTS[raw] : 'tabs',
+    species_id: type === 'species' ? filter : null, age_group: type === 'age_group' ? filter : null
   };
   const { error } = await sb.from('leaderboard_configs').update(patch).eq('id', id);
   if (error) return msg('configMsg', error.message, false);
@@ -584,8 +594,8 @@ function exportCatches() {
 }
 function exportLeaderboard() {
   const data = currentBoards();
-  const rows = [['board', 'rank', 'name', 'age_group', 'fish', 'lbs']];
-  (data?.boards || []).forEach(b => b.rows.forEach(r => rows.push([b.title, r.rank, r.name, r.group, r.fish, Number(r.lbs).toFixed(2)])));
+  const rows = [['board', 'section', 'rank', 'name', 'age_group', 'fish', 'lbs']];
+  (data?.boards || []).forEach(b => boardSections(b).forEach(sec => sec.rows.forEach(r => rows.push([b.title, sec.name || '', r.rank, r.name, r.group, r.fish, Number(r.lbs).toFixed(2)]))));
   download(`${slug(S.t?.name || data?.tournament?.name)}-leaderboard.csv`, toCSV(rows));
 }
 
@@ -778,11 +788,21 @@ function computeBoards() {
   };
   const boards = [];
   for (const c of S.configs.filter(c => c.enabled).sort((a, b) => a.sort_order - b.sort_order)) {
-    if (c.board_type === 'species' && !c.species_id && !c.all_species) S.species.forEach(s => boards.push({ title: `${c.title} – ${s.name}`, scoring: c.scoring, rows: rowsFor(c.scoring, s.id, null, c.top_n) }));
-    else if (c.board_type === 'age_group' && !c.age_group) (S.t.age_groups || []).forEach(g => boards.push({ title: `${c.title} – ${g}`, scoring: c.scoring, rows: rowsFor(c.scoring, null, g, c.top_n) }));
+    const mode = c.split_mode || 'tabs';
+    if (c.board_type === 'species' && !c.species_id && mode === 'tabs') S.species.forEach(s => boards.push({ title: `${c.title} – ${s.name}`, scoring: c.scoring, rows: rowsFor(c.scoring, s.id, null, c.top_n) }));
+    else if (c.board_type === 'species' && !c.species_id && mode === 'grouped') boards.push({ title: c.title, scoring: c.scoring, rows: [], groups: S.species.map(s => ({ name: s.name, rows: rowsFor(c.scoring, s.id, null, c.top_n) })) });
+    else if (c.board_type === 'age_group' && !c.age_group && mode === 'tabs') (S.t.age_groups || []).forEach(g => boards.push({ title: `${c.title} – ${g}`, scoring: c.scoring, rows: rowsFor(c.scoring, null, g, c.top_n) }));
+    else if (c.board_type === 'age_group' && !c.age_group && mode === 'grouped') boards.push({ title: c.title, scoring: c.scoring, rows: [], groups: (S.t.age_groups || []).map(g => ({ name: g, rows: rowsFor(c.scoring, null, g, c.top_n) })) });
     else boards.push({ title: c.title, scoring: c.scoring, rows: rowsFor(c.scoring, c.species_id, c.age_group, c.top_n) });
   }
   return { tournament: { id: S.t.id, name: S.t.name, year: S.t.year, status: S.t.status }, boards, local: true };
+}
+// A board is either plain ({rows}) or grouped ({groups:[{name, rows}]}) – one section per species / age group.
+function boardSections(b) { return b.groups ? b.groups : [{ name: null, rows: b.rows || [] }]; }
+function boardHasData(b) { return boardSections(b).some(s => s.rows.length); }
+function rowsHtml(rows, compact) {
+  return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)} <span class="text-slate-400 text-sm">${esc(r.group || '')}</span></span><span class="font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('')
+    || `<div class="text-sm text-slate-500 ${compact ? 'px-2 py-1' : ''}">No fish yet</div>`;
 }
 // Selected leaderboard tab lives in the URL hash (#board=<slug>) so it can be shared.
 function currentBoardSlug() { const m = location.hash.match(/board=([^&]+)/); return m ? decodeURIComponent(m[1]) : null; }
@@ -807,7 +827,11 @@ function renderLeaderboard() {
   const b = boards[idx];
   $('boardContent').innerHTML = `
     <div class="text-xs text-slate-500 mb-2">${b.scoring === 'biggest_fish' ? 'Biggest single fish' : 'Total weight'}</div>
-    ${b.rows.map(r => `<div class="flex justify-between gap-3 py-2 border-b"><span class="min-w-0"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)} <span class="text-slate-400 text-sm">${esc(r.group || '')}</span></span><span class="font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('') || '<div class="text-sm text-slate-500">No fish yet</div>'}`;
+    ${b.groups ? b.groups.map(g => `
+      <section class="mb-4">
+        <h3 class="sticky top-0 bg-slate-100 text-slate-800 font-semibold text-sm uppercase tracking-wide px-2 py-1 rounded">${esc(g.name)}</h3>
+        ${rowsHtml(g.rows, true)}
+      </section>`).join('') || '<div class="text-sm text-slate-500">No sections</div>' : rowsHtml(b.rows)}`;
   const active = $('boardTabs').children[idx];
   if (active && S.lastBoardIdx !== idx) { const c = $('boardTabs'); c.scrollLeft = active.offsetLeft - (c.clientWidth - active.offsetWidth) / 2; S.lastBoardIdx = idx; }
 }
@@ -843,15 +867,43 @@ function startDisplay() {
   S.displayIdx = 0; renderDisplay();
   S.displayTimer = setInterval(() => { S.displayIdx++; renderDisplay(); }, CFG.boardRotateSeconds * 1000);
 }
+const TV_LINES = 11; // rows per TV slide (section headers count as a line)
+function displaySlides(data) {
+  const boards = (data?.boards || []);
+  const withData = boards.filter(boardHasData);
+  const slides = [];
+  for (const b of (withData.length ? withData : boards)) {
+    if (!b.groups) { slides.push({ title: b.title, sections: [{ name: null, rows: b.rows }] }); continue; }
+    // Grouped board: keep sections whole where possible, split long ones across pages.
+    const pages = []; let cur = [], lines = 0;
+    for (const g of b.groups.filter(g => g.rows.length).length ? b.groups.filter(g => g.rows.length) : b.groups) {
+      let rows = g.rows.length ? g.rows : [];
+      do {
+        const room = TV_LINES - lines - 1;
+        if (room < 2 && cur.length) { pages.push(cur); cur = []; lines = 0; continue; }
+        const part = rows.slice(0, Math.max(room, 1));
+        cur.push({ name: g.name + (rows !== g.rows ? ' (cont.)' : ''), rows: part, empty: !g.rows.length });
+        lines += 1 + Math.max(part.length, 1);
+        rows = rows.slice(part.length);
+      } while (rows.length);
+    }
+    if (cur.length) pages.push(cur);
+    pages.forEach((p, i) => slides.push({ title: b.title + (pages.length > 1 ? ` (${i + 1}/${pages.length})` : ''), sections: p }));
+  }
+  return slides;
+}
 function renderDisplay() {
   const data = S.board.data; // the TV always uses the polled RPC
   $('displayTournament').textContent = data?.tournament ? `${data.tournament.name} (${data.tournament.year})` : '';
-  const boards = (data?.boards || []).filter(b => b.rows.length) ;
-  const list = boards.length ? boards : (data?.boards || []);
-  if (!list.length) { $('displayTitle').textContent = 'LIVE LEADERBOARD'; $('displayBoard').innerHTML = `<p class="text-center text-slate-400">${data ? 'No weigh-ins yet.' : 'Loading…'}</p>`; return; }
-  const b = list[S.displayIdx % list.length];
-  $('displayTitle').textContent = b.title.toUpperCase();
-  $('displayBoard').innerHTML = b.rows.map(r => `<div class="flex justify-between border-b border-slate-700 py-2"><span>${r.rank}. ${esc(r.name)} <span class="text-slate-400 text-xl">${esc(r.group || '')}</span></span><span class="font-bold">${formatLbs(r.lbs)}</span></div>`).join('') || '<p class="text-center text-slate-400">No fish yet</p>';
+  const slides = displaySlides(data);
+  if (!slides.length) { $('displayTitle').textContent = 'LIVE LEADERBOARD'; $('displayBoard').innerHTML = `<p class="text-center text-slate-400">${data ? 'No weigh-ins yet.' : 'Loading…'}</p>`; return; }
+  const sl = slides[S.displayIdx % slides.length];
+  const grouped = sl.sections.some(x => x.name);
+  $('displayTitle').textContent = sl.title.toUpperCase();
+  $('displayBoard').innerHTML = sl.sections.map(sec => `
+    ${sec.name ? `<div class="text-xl font-semibold uppercase tracking-wider text-sky-300 mt-4 border-b border-sky-800 pb-1">${esc(sec.name)}</div>` : ''}
+    ${sec.rows.map(r => `<div class="flex justify-between border-b border-slate-700 ${grouped ? 'py-1 text-2xl' : 'py-2'}"><span>${r.rank}. ${esc(r.name)} <span class="text-slate-400 text-xl">${esc(r.group || '')}</span></span><span class="font-bold">${formatLbs(r.lbs)}</span></div>`).join('')
+      || `<p class="text-slate-500 text-xl py-1">No fish yet</p>`}`).join('');
   $('displayUpdated').textContent = S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() : '';
 }
 

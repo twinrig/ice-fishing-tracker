@@ -90,8 +90,12 @@ To remove someone completely, delete their user in Authentication → Users (the
 
 4. **Sign in on the site** with "Staff sign in", go to **Setup**, create the tournament (name, year, age groups,
    species), and adjust the leaderboards. Four default boards are created automatically.
-   For a Species board the picker offers **Each species** (one board per species), **All species** (one board
-   ranking every species together, e.g. biggest fish of any kind), or a single species.
+   Species and Age group / Division boards have the same picker choices:
+   - **Each species / age group** – a separate tab (and TV slide) per species or group.
+   - **All species / age groups, grouped on one board** – ONE tab (one TV slide, split into pages on the TV
+     if it's long) with a separately ranked section per species or group (Walleye, Perch, …).
+   - **Any species / age group, combined ranking** – one tab, everyone ranked together.
+   - Or pick a single species / group.
 
 ## Tournament day checklist
 

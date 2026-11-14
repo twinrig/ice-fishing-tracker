@@ -85,7 +85,7 @@
           <select id="tStatus" class="w-full border rounded px-3 py-2">
             <option value="setup">Setup</option><option value="active">Active (on the ice)</option><option value="closed">Closed</option>
           </select></div>
-        <div><label class="block text-sm font-medium">Age Groups (comma separated)</label>
+        <div><label class="block text-sm font-medium">Age Groups / Divisions (comma separated)</label>
           <input id="ageGroups" class="w-full border rounded px-3 py-2" value="Youth, Adult, Senior"></div>
         <div><label class="block text-sm font-medium">Species (comma separated)</label>
           <input id="speciesList" class="w-full border rounded px-3 py-2" value="Walleye, Perch, Pike, Crappie"></div>
@@ -101,7 +101,7 @@
         <h3 class="font-semibold">Leaderboards</h3>
         <button onclick="addBoardConfig()" class="text-sm border px-3 py-1 rounded">+ Add board</button>
       </div>
-      <p class="text-xs text-slate-500 mb-3">"Each species" / "Each age group" makes one board per species or group; "All species" makes one board ranking every species together. Order controls the big-screen rotation.</p>
+      <p class="text-xs text-slate-500 mb-3">For Species and Age group / Division boards: "Each" makes a separate tab per species or group; "All …, grouped on one board" makes one tab with a separately ranked section for each; "Any …, combined ranking" ranks everyone together on one tab. Order controls the big-screen rotation.</p>
       <div id="configList" class="space-y-2 text-sm"></div>
       <div id="configMsg" class="mt-2 text-sm"></div>
     </div>
