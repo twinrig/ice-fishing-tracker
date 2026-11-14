@@ -144,6 +144,15 @@ Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, mus
 There is no angler check-in step, no fish length and no staff initials. Each weigh-in automatically records the
 signed-in staff account (`recorded_by`) and the station name set on that laptop.
 
+## Deleting a tournament
+
+Setup → **Danger zone – Delete tournament** (admins only, bottom of the page). The pop-up shows what will be deleted
+(participants, weigh-ins, species, leaderboards) and the Delete button stays disabled until you type the tournament
+name exactly (capital letters matter; spaces at the ends are ignored). The database re-checks the admin role and the
+name and deletes everything in one transaction (`delete_tournament`). This can't be undone, so export the CSVs first.
+Afterwards this laptop switches to another tournament and forgets the deleted one (cache, reserved numbers, unsynced
+changes). Other staff laptops switch away automatically; public links for it show "not available".
+
 ## Sample file
 
 `samples/test-anglers.csv` – 40 fake anglers mixing age only, birth date only (mixed formats), both

@@ -314,6 +314,8 @@ async function loadTournamentList() {
     : '<option value="">No tournaments yet</option>';
   // Keep the tournament already on screen (e.g. across sign-in), else the link's ?t=, else the last one picked here.
   const byId = id => id && S.tournaments.find(t => t.id === id);
+  // A public page for a specific tournament never falls back to a different one: it shows "not available" instead.
+  if (KIOSK && urlParam('t')) return selectTournament(urlParam('t'));
   const pick = byId(S.tid) || byId(urlParam('t')) || byId(LS.get('ift.tid', null))
     || S.tournaments.find(t => t.status === 'active') || S.tournaments[0];
   await selectTournament(pick ? pick.id : null);
@@ -363,10 +365,11 @@ async function loadTournamentData() {
   const tid = S.tid; if (!tid) return;
   try {
     const [t, sp, cf] = await Promise.all([
-      sb.from('tournaments').select('*').eq('id', tid).single(),
+      sb.from('tournaments').select('*').eq('id', tid).maybeSingle(),
       sb.from('species').select('*').eq('tournament_id', tid).order('sort_order').order('name'),
       sb.from('leaderboard_configs').select('*').eq('tournament_id', tid).order('sort_order').order('created_at')
     ]);
+    if (!t.error && !t.data) { if (tid === S.tid) await forgetTournament(tid, true); return; } // deleted elsewhere
     for (const r of [t, sp, cf]) if (r.error) throw r.error;
     let parts = [], catches = [];
     if (canReadData()) [parts, catches] = await Promise.all([fetchAll('participants', tid), fetchAll('catches', tid)]);
@@ -402,6 +405,7 @@ function subscribeRealtime() {
   S.channel = sb.channel('t-' + tid)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'catches', filter: 'tournament_id=eq.' + tid }, handler('catches'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'participants', filter: 'tournament_id=eq.' + tid }, handler('participants'))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'tournaments' }, payload => { if (payload.old?.id) forgetTournament(payload.old.id); })
     .subscribe(status => {
       if (status === 'SUBSCRIBED') {
         $('liveStatus').textContent = '● Live updates on';
@@ -449,6 +453,7 @@ function newTournamentForm() {
   renderDivisionRows([{ name: 'Youth', min: null, max: 17 }, { name: 'Adult', min: 18, max: 64 }, { name: 'Senior', min: 65, max: null }]);
   $('speciesList').value = 'Walleye, Perch, Pike, Crappie';
   $('setupMsg').textContent = ''; $('publicLinks').innerHTML = '';
+  $('dangerZone').classList.add('hidden');
 }
 // ---- Age/Division ranges
 // Ordered divisions for a tournament: [{name, min, max, suggested}]
@@ -522,6 +527,8 @@ function divisionLabel(p) {
     + (unknown ? ' <span class="text-xs bg-red-100 text-red-800 px-1 rounded">not in this tournament\'s Age/Division list</span>' : '');
 }
 function fillSetupForm() {
+  $('dangerZone').classList.toggle('hidden', !(S.t && hasRole('admin')));
+  if (S.t) $('dzName').textContent = S.t.name;
   if (!S.t) { if (!S.tid) newTournamentForm(); return; }
   S.editingNew = false;
   $('setupTitle').textContent = 'Tournament Setup – ' + S.t.name;
@@ -576,6 +583,59 @@ async function saveTournament() {
   await loadTournamentList();
   await selectTournament(tid);
   msg('setupMsg', 'Tournament saved!' + (problems.length ? ' Note: ' + problems.join('; ') : ''), !problems.length);
+}
+
+// ---- Delete tournament (admin): typed-name confirmation, done server-side in one transaction.
+function openDeleteTournament() {
+  if (!S.t || !hasRole('admin')) return;
+  if (!S.online) return msg('dzMsg', 'You need to be online to delete a tournament.', false);
+  const n = (x, w) => `${x} ${w}${x === 1 ? '' : 's'}`;
+  $('delName').textContent = S.t.name; $('delNameHint').textContent = S.t.name;
+  $('delCounts').innerHTML = [n(S.participants.length, 'participant'), n(S.catches.length, 'weigh-in'),
+    n(S.species.length, 'species').replace(/speciess/, 'species'), n(S.configs.length, 'leaderboard')].map(x => `<li>${esc(x)}</li>`).join('');
+  $('delConfirm').value = ''; $('delMsg').textContent = ''; deleteConfirmChanged();
+  S.deletingTid = S.t.id;
+  openModal('deleteModal'); setTimeout(() => $('delConfirm').focus(), 0);
+}
+function closeDeleteTournament() { S.deletingTid = null; closeModal('deleteModal'); }
+function deleteNameMatches() { return !!S.t && S.t.id === S.deletingTid && $('delConfirm').value.trim() === S.t.name.trim(); }
+function deleteConfirmChanged() { $('delGo').disabled = !deleteNameMatches(); }
+async function confirmDeleteTournament() {
+  if (!deleteNameMatches()) return;
+  const tid = S.t.id, typed = $('delConfirm').value.trim();
+  $('delGo').disabled = true; $('delMsg').textContent = 'Deleting…';
+  const { data, error } = await sb.rpc('delete_tournament', { p_tournament_id: tid, p_confirm_name: typed });
+  if (error) { $('delMsg').textContent = error.message; deleteConfirmChanged(); return; }
+  closeDeleteTournament();
+  await forgetTournament(tid);
+  msg('setupMsg', `Deleted "${data.name}" (${data.participants} participants, ${data.catches} weigh-ins).`);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('deleteModal').classList.contains('hidden')) closeDeleteTournament(); });
+// Drop everything this laptop keeps for a tournament that no longer exists, then move to another one.
+let forgetting = null;
+async function forgetTournament(tid, purge = true) {
+  if (forgetting === tid) return; forgetting = tid;
+  try {
+    if (!purge) { S.tournaments = S.tournaments.filter(t => t.id !== tid); if (S.tid === tid) S.tid = null; return await loadTournamentList(); }
+    const dropped = Q.filter(op => op.tid === tid).length + FAILED.filter(op => op.tid === tid).length;
+    Q = Q.filter(op => op.tid !== tid); FAILED = FAILED.filter(op => op.tid !== tid); saveQueue();
+    LS.del('ift.cache2.' + tid); LS.del('ift.codes.' + tid);
+    if (LS.get('ift.tid', null) === tid) LS.del('ift.tid');
+    S.tournaments = S.tournaments.filter(t => t.id !== tid);
+    if (S.tid === tid) {
+      S.tid = null; S.t = null;
+      const q = new URLSearchParams(location.search);
+      if (q.get('t') === tid) { q.delete('t'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash); }
+    }
+    if (BOARD_MODE || SCREEN_MODE) { // public pages: show a notice rather than silently jumping elsewhere
+      S.board.data = { error: 'gone' }; refreshViews();
+    } else await loadTournamentList();
+    if (dropped) console.info(`Dropped ${dropped} unsynced change(s) for a deleted tournament.`);
+  } finally { forgetting = null; }
+}
+async function tournamentStillExists(tid) {
+  const { data, error } = await sb.from('tournaments').select('id').eq('id', tid).maybeSingle();
+  return error ? true : !!data; // on errors assume it exists (offline etc.)
 }
 
 // Special picker values for species / age-group boards with no single species / group chosen.
@@ -1064,7 +1124,7 @@ function renderLeaderboard() {
   $('boardUpdated').textContent = data?.local ? 'Live (this station)' : (S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() + ` • refreshes every ${CFG.publicPollSeconds}s` : '');
   if (!data || data.error) $('boardTabs').innerHTML = '';
   if (!data) { $('boardContent').innerHTML = `<p class="text-slate-500">${S.tid ? 'Loading…' : 'No public tournament yet.'}</p>`; return; }
-  if (data.error) { $('boardContent').innerHTML = '<p class="text-slate-500">This tournament is not public.</p>'; return; }
+  if (data.error) { $('boardContent').innerHTML = '<p class="text-slate-500">This leaderboard isn\'t available – the tournament may have been deleted or hidden from the public.</p>'; return; }
   const boards = data.boards || [];
   if (!boards.length) { $('boardTabs').innerHTML = ''; $('boardContent').innerHTML = '<p class="text-slate-500">No leaderboards configured.</p>'; return; }
   const slugs = []; boards.forEach((b, i) => { let k = slug(b.title) || 'board'; if (slugs.includes(k)) k += '-' + i; slugs.push(k); });
@@ -1093,6 +1153,13 @@ async function pollBoard() {
   if (error) { if (isNetErr(error)) setOnline(false); return; }
   if (!S.online) setOnline(true);
   S.board.at = new Date(); S.board.tid = tid;
+  if (data.error === 'not_found') { // deleted (or hidden from the public) since we picked it
+    if (canReadData()) { if (!(await tournamentStillExists(tid))) return forgetTournament(tid, true); }
+    else if (!KIOSK) {
+      const r = await sb.rpc('list_public_tournaments');
+      if (!r.error && !(r.data || []).some(x => x.id === tid)) return forgetTournament(tid, false);
+    }
+  }
   if (!data.unchanged) { S.board.data = data; S.board.version = data.v ?? null; }
   if (S.tab === 'leaderboard') renderLeaderboard();
   if (S.tab === 'display') renderDisplay();
@@ -1147,7 +1214,7 @@ function renderDisplay() {
   const data = S.board.data; // the TV always uses the polled RPC
   $('displayTournament').textContent = data?.tournament ? `${data.tournament.name} (${data.tournament.year})` : '';
   const slides = displaySlides(data);
-  if (!slides.length) { $('displayTitle').textContent = 'LIVE LEADERBOARD'; $('displayBoard').innerHTML = `<p class="text-center text-slate-400">${data ? 'No weigh-ins yet.' : 'Loading…'}</p>`; return; }
+  if (!slides.length) { $('displayTitle').textContent = 'LIVE LEADERBOARD'; $('displayBoard').innerHTML = `<p class="text-center text-slate-400">${data?.error ? 'This leaderboard isn\'t available.' : data ? 'No weigh-ins yet.' : 'Loading…'}</p>`; return; }
   const sl = slides[S.displayIdx % slides.length];
   const grouped = sl.sections.some(x => x.name);
   $('displayTitle').textContent = sl.title.toUpperCase();
