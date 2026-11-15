@@ -227,7 +227,8 @@ function describeOp(op) {
   if (op.table === 'participants' && op.kind === 'insert') return `New participant: ${op.row.display_name} ${op.row.participant_code || '(number pending)'}`;
   if (op.table === 'participants') return `Participant update (${Object.keys(op.patch).join(', ')})`;
   if (op.kind === 'insert') return `Weigh-in: ${formatLbs(op.row.weight_lbs)}`;
-  return `Weigh-in update (${Object.keys(op.patch).join(', ')})`;
+  const c = S.catches.find(x => x.id === op.id);
+  return `Ticket ${c ? ticketLabel(c) : ''} ${op.patch.status === 'voided' ? 'void' : op.patch.status === 'active' ? 'restore' : 'edit'} (${Object.keys(op.patch).join(', ')})`;
 }
 function renderQueue() {
   const el = $('queueContent');
@@ -852,10 +853,10 @@ function exportParticipants() {
 }
 function exportCatches() {
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
-  const rows = [['ticket', 'id', 'name', 'Age/Division', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason']]
+  const rows = [['ticket_no', 'ticket_code', 'ticket_id', 'id', 'name', 'Age/Division', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason', 'note', 'last_changed_at']]
     .concat(S.catches.slice().sort((a, b) => (a.weighed_at || '').localeCompare(b.weighed_at || '')).map(c => {
       const p = pById[c.participant_id] || {};
-      return [c.id, p.participant_code, p.display_name, p.age_group, sById[c.species_id]?.name, Number(c.weight_lbs).toFixed(2), c.station, c.weighed_at, c.status, c.void_reason];
+      return [c.ticket_no, ticketCode(c), c.id, p.participant_code, p.display_name, p.age_group, sById[c.species_id]?.name, Number(c.weight_lbs).toFixed(2), c.station, c.weighed_at, c.status, c.void_reason, c.note, c.updated_at];
     }));
   download(`${slug(S.t?.name)}-weigh-ins.csv`, toCSV(rows));
 }
@@ -1012,7 +1013,7 @@ function printWeighTicket(p, c) {
       <div class="text-lg font-bold">${formatLbs(c.weight_lbs)}</div>
       <div>${new Date(c.weighed_at).toLocaleTimeString()}</div>
       <div class="text-xs">${esc(c.station || '')}</div>
-      <div class="font-mono text-[9px] mt-1">${c.id.slice(0, 8)}</div>
+      <div class="font-mono text-[9px] mt-1">${c.ticket_no ? 'Ticket #' + c.ticket_no + ' • ' : ''}${ticketCode(c)}</div>
     </div>`);
 }
 
@@ -1048,23 +1049,125 @@ function submitWeighIn() {
   msg('weighMsg', `Recorded ${formatLbs(total)} for ${p.display_name}`);
   $('scanNum').focus();
 }
+// ---- Find / edit weigh tickets (weigh + admin). Edits go through the offline queue as absolute-value updates.
+function ticketCode(c) { return c.id.replace(/-/g, '').slice(0, 8).toUpperCase(); }
+function ticketLabel(c) { return c.ticket_no ? `#${c.ticket_no}` : '#…'; }
+function canEditTickets() { return hasRole('weigh'); }
+function ticketMatches(c, q, p, sp) {
+  if (!q) return true;
+  const year = S.t?.year;
+  return q.split(/\s+/).every(tok => {
+    const t = tok.toLowerCase();
+    if (/^#\d+$/.test(t)) return String(c.ticket_no) === t.slice(1);
+    if (/^\d{4}_\d+$/.test(t)) return p?.participant_code === normCode(year, t);
+    if (/^\d+$/.test(t)) return String(c.ticket_no) === t || (p?.participant_code && Number(p.participant_code.split('_')[1]) === Number(t));
+    if (/^[0-9a-f]{4,8}$/i.test(t) && ticketCode(c).toLowerCase().startsWith(t)) return true;
+    return [p?.display_name, sp?.name, c.station, c.note].some(v => (v || '').toLowerCase().includes(t));
+  });
+}
 function renderRecentCatches() {
   const el = $('recentCatches'); if (!el) return;
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
-  const list = S.catches.slice().sort((a, b) => (b.weighed_at || '').localeCompare(a.weighed_at || '')).slice(0, 40);
+  const q = ($('tkSearch')?.value || '').trim(), showVoid = $('tkShowVoid')?.checked;
+  const limit = S.tkLimit || 50;
+  const all = S.catches.filter(c => (showVoid || c.status !== 'voided' || q) && ticketMatches(c, q, pById[c.participant_id], sById[c.species_id]))
+    .sort((a, b) => (b.weighed_at || '').localeCompare(a.weighed_at || '') || (b.ticket_no || 1e9) - (a.ticket_no || 1e9));
+  const list = all.slice(0, limit), edit = canEditTickets();
+  $('tkCount').textContent = q ? `${all.length} match${all.length === 1 ? '' : 'es'}` : `${S.catches.length} ticket${S.catches.length === 1 ? '' : 's'} • newest first`;
+  $('tkMore').classList.toggle('hidden', all.length <= limit);
   el.innerHTML = list.map(c => {
-    const canVoid = c.status === 'active' && (hasRole('admin') || (hasRole('weigh') && (c.recorded_by === S.user?.id || c._pending)));
-    return `<div class="flex justify-between items-center border-b py-1 ${c.status === 'voided' ? 'line-through text-slate-400' : ''}">
-      <span>${new Date(c.weighed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${esc(pById[c.participant_id]?.display_name || '?')} • ${esc(sById[c.species_id]?.name || '')} • <b>${formatLbs(c.weight_lbs)}</b>
-      ${c._pending ? '<span class="text-xs text-amber-700">(not synced)</span>' : ''} <span class="text-xs text-slate-400">${esc(c.station || '')}</span></span>
-      ${canVoid ? `<button onclick="voidCatch('${c.id}')" class="text-xs text-red-700 border px-2 rounded">Void</button>` : ''}
-    </div>`;
-  }).join('') || '<p class="text-slate-500">No weigh-ins yet.</p>';
+    const p = pById[c.participant_id], v = c.status === 'voided';
+    const edited = c.updated_at && c.created_at && (new Date(c.updated_at) - new Date(c.created_at) > 2000);
+    const inner = `<div class="flex justify-between items-start gap-2">
+        <div class="min-w-0">
+          <div class="font-medium truncate ${v ? 'line-through text-slate-400' : ''}">${esc(p?.display_name || '?')} <span class="text-xs text-slate-500 font-mono">${esc(p?.participant_code || '')}</span></div>
+          <div class="text-xs text-slate-500">${ticketLabel(c)} • ${new Date(c.weighed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${esc(sById[c.species_id]?.name || '')}${c.station ? ' • ' + esc(c.station) : ''}
+            ${v ? '<span class="text-red-700">• voided</span>' : ''}${edited && !v ? ' • <span class="text-blue-700">edited</span>' : ''}${c._pending ? ' • <span class="text-amber-700">not synced</span>' : ''}${c._failed ? ' • <span class="text-red-700">sync failed</span>' : ''}</div>
+          ${c.note ? `<div class="text-xs text-slate-600 italic truncate">${esc(c.note)}</div>` : ''}
+        </div>
+        <div class="font-bold whitespace-nowrap ${v ? 'line-through text-slate-400' : ''}">${formatLbs(c.weight_lbs)}</div>
+      </div>`;
+    return edit ? `<button type="button" onclick="openTicket('${c.id}')" class="tk-row block w-full text-left border-b py-2 px-1 hover:bg-slate-50 active:bg-slate-100">${inner}</button>`
+      : `<div class="border-b py-2 px-1">${inner}</div>`;
+  }).join('') || `<p class="text-slate-500 py-2">${q ? 'No tickets match.' : 'No weigh-ins yet.'}</p>`;
+  if (S.ticketId && !$('ticketModal').classList.contains('hidden')) refreshTicketHeader();
 }
-function voidCatch(id) {
-  const reason = prompt('Reason for voiding this weigh-in?'); if (reason === null) return;
-  enqueue({ kind: 'update', table: 'catches', id, patch: { status: 'voided', void_reason: reason.slice(0, 200) || null } });
+function openTicket(id) {
+  const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
+  S.ticketId = id;
+  $('tkAngler').innerHTML = S.participants.slice().sort((a, b) => a.display_name.localeCompare(b.display_name))
+    .map(p => `<option value="${p.id}">${esc(p.display_name)} — ${esc(p.participant_code || 'no #')}${p.age_group ? ' (' + esc(p.age_group) + ')' : ''}</option>`).join('');
+  $('tkSpecies').innerHTML = S.species.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('tkAngler').value = c.participant_id; $('tkSpecies').value = c.species_id;
+  $('tkWeight').value = Number(c.weight_lbs).toFixed(2); $('tkNote').value = c.note || '';
+  $('tkMsg').textContent = ''; showVoidConfirm(false); refreshTicketHeader();
+  openModal('ticketModal'); loadTicketHistory(id);
 }
+function refreshTicketHeader() {
+  const c = S.catches.find(x => x.id === S.ticketId); if (!c) return closeTicket();
+  const v = c.status === 'voided';
+  $('tkTitle').textContent = `Ticket ${ticketLabel(c)}`;
+  $('tkMeta').textContent = `Code ${ticketCode(c)} • weighed ${new Date(c.weighed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}${c.station ? ' at ' + c.station : ''}${c._pending ? ' • not synced yet' : ''}`;
+  $('tkVoided').classList.toggle('hidden', !v);
+  $('tkVoided').textContent = v ? `Voided${c.void_reason ? ': ' + c.void_reason : ''}. It doesn't count on any leaderboard.` : '';
+  $('tkVoidBtn').classList.toggle('hidden', v); $('tkRestoreBtn').classList.toggle('hidden', !v);
+  if (v) showVoidConfirm(false);
+}
+function closeTicket() { S.ticketId = null; closeModal('ticketModal'); }
+function showVoidConfirm(on) {
+  $('tkVoidConfirm').classList.toggle('hidden', !on); $('tkVoidReason').value = ''; $('tkVoidGo').disabled = true;
+  if (on) setTimeout(() => $('tkVoidReason').focus(), 0);
+}
+function saveTicket() {
+  const c = S.catches.find(x => x.id === S.ticketId); if (!c) return;
+  const w = round2(parseFloat($('tkWeight').value));
+  if (!(w > 0) || w > 500) return msg('tkMsg', 'Enter a weight between 0.01 and 500 lbs', false);
+  const want = { participant_id: $('tkAngler').value, species_id: $('tkSpecies').value, weight_lbs: w, note: $('tkNote').value.trim().slice(0, 200) || null };
+  const patch = {};
+  for (const [k, v] of Object.entries(want)) if (k === 'weight_lbs' ? round2(c[k]) !== v : (c[k] ?? null) !== v) patch[k] = v;
+  if (!Object.keys(patch).length) return msg('tkMsg', 'Nothing changed.');
+  enqueue({ kind: 'update', table: 'catches', id: c.id, patch });
+  msg('weighMsg', `Saved ticket ${ticketLabel(c)}${S.online ? '' : ' (will sync when back online)'}.`);
+  closeTicket();
+}
+function voidTicket() {
+  const c = S.catches.find(x => x.id === S.ticketId); const reason = $('tkVoidReason').value.trim();
+  if (!c || !reason) return;
+  enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'voided', void_reason: reason.slice(0, 200) } });
+  msg('weighMsg', `Voided ticket ${ticketLabel(c)}.`); closeTicket();
+}
+function restoreTicket() {
+  const c = S.catches.find(x => x.id === S.ticketId); if (!c) return;
+  if (!confirm(`Restore ticket ${ticketLabel(c)}? It will count on the leaderboards again.`)) return;
+  enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'active', void_reason: null } });
+  msg('weighMsg', `Restored ticket ${ticketLabel(c)}.`); closeTicket();
+}
+function reprintTicket() {
+  const c = S.catches.find(x => x.id === S.ticketId); const p = c && S.participants.find(x => x.id === c.participant_id);
+  if (c && p) printWeighTicket(p, c);
+}
+async function loadTicketHistory(id) {
+  const el = $('tkHistory');
+  const pName = pid => S.participants.find(p => p.id === pid)?.display_name || '?';
+  const sName = sid => S.species.find(s => s.id === sid)?.name || '?';
+  const fmt = (k, [a, b]) => k === 'weight_lbs' ? `weight ${Number(a).toFixed(2)} → ${Number(b).toFixed(2)} lbs`
+    : k === 'species_id' ? `species ${sName(a)} → ${sName(b)}` : k === 'participant_id' ? `angler ${pName(a)} → ${pName(b)}`
+    : k === 'note' ? `note “${a || ''}” → “${b || ''}”` : k === 'void_reason' ? (b ? `reason: ${b}` : '') : '';
+  const pend = Q.filter(op => op.table === 'catches' && op.kind === 'update' && op.id === id)
+    .map(op => `<div class="text-amber-700">Waiting to sync: ${esc(Object.keys(op.patch).join(', '))}</div>`).join('');
+  el.innerHTML = pend + '<div>Loading…</div>';
+  if (!S.online) { el.innerHTML = pend + '<div>History is available when online.</div>'; return; }
+  const { data, error } = await sb.from('catch_history').select('*').eq('catch_id', id).order('changed_at');
+  if (S.ticketId !== id) return;
+  if (error) { el.innerHTML = pend + `<div>Couldn't load history (${esc(error.message)}).</div>`; return; }
+  const rows = (data || []).map(h => {
+    const what = Object.entries(h.changes).map(([k, v]) => fmt(k, v)).filter(Boolean).join('; ');
+    const verb = h.action === 'void' ? 'Voided' : h.action === 'restore' ? 'Restored' : 'Edited';
+    return `<div>${new Date(h.changed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })} • <b>${verb}</b> by ${esc(h.changed_by_email || 'unknown')}${what ? ' – ' + esc(what) : ''}</div>`;
+  });
+  el.innerHTML = pend + (rows.join('') || '<div>No changes since it was weighed.</div>');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('ticketModal').classList.contains('hidden')) closeTicket(); });
 
 // ---------------------------------------------------------------- leaderboards
 // Same logic as private.leaderboard() in the database, run locally for staff (instant + offline).

@@ -31,6 +31,7 @@
   }
   .board-tabs { scrollbar-width: thin; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
   .board-tabs button { scroll-snap-align: start; flex: 0 0 auto; }
+  #mainNav .tab-btn { flex: 0 0 auto; white-space: nowrap; }
   body.screen-mode header, body.screen-mode #mainNav, body.screen-mode #connBar { display: none !important; }
   body.screen-mode .app-wrap { max-width: none; padding: 0; }
   body.screen-mode #tab-display > div { border-radius: 0; min-height: 100vh; }
@@ -62,7 +63,7 @@
     <span id="liveStatus" class="text-slate-500"></span>
   </div>
 
-  <nav class="flex gap-2 mb-4 border-b text-sm" id="mainNav">
+  <nav class="flex gap-2 mb-4 border-b text-sm overflow-x-auto" id="mainNav">
     <button data-tab="setup" onclick="showTab('setup')" class="tab-btn px-3 py-2 hidden">Setup</button>
     <button data-tab="participants" onclick="showTab('participants')" class="tab-btn px-3 py-2 hidden">Participants</button>
     <button data-tab="weighin" onclick="showTab('weighin')" class="tab-btn px-3 py-2 hidden">Weigh-in</button>
@@ -77,7 +78,7 @@
         <h2 class="text-xl font-semibold" id="setupTitle">Tournament Setup</h2>
         <button onclick="newTournamentForm()" class="text-sm border px-3 py-1 rounded">+ New tournament</button>
       </div>
-      <div class="grid md:grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 [&>*]:min-w-0">
         <div><label class="block text-sm font-medium">Tournament Name</label>
           <input id="tName" class="w-full border rounded px-3 py-2" value="Winter Classic 2026"></div>
         <div><label class="block text-sm font-medium">Year <span class="text-red-600">*</span></label>
@@ -180,7 +181,7 @@
         <div class="flex items-center gap-1">
           <input id="checkYear" class="w-20 border rounded px-3 py-2 text-lg bg-slate-50" readonly>
           <span class="text-xl font-mono">_</span>
-          <input id="checkNum" class="flex-1 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" onkeydown="if(event.key==='Enter') findParticipant()">
+          <input id="checkNum" class="flex-1 min-w-0 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" onkeydown="if(event.key==='Enter') findParticipant()">
           <button onclick="findParticipant()" class="bg-blue-600 text-white px-4 py-2 rounded">Find</button>
         </div>
         <div id="findResult" class="mt-2 text-sm"></div>
@@ -196,7 +197,7 @@
 
   <!-- WEIGH-IN (weigh) -->
   <section id="tab-weighin" class="tab hidden">
-    <div class="grid md:grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 [&>*]:min-w-0">
       <div class="bg-white rounded-xl shadow p-6">
         <div class="flex justify-between items-center mb-4">
           <h2 class="text-xl font-semibold">Weigh-in Station</h2>
@@ -206,7 +207,7 @@
         <div class="flex items-center gap-1 mb-3">
           <input id="scanYear" class="w-20 border rounded px-3 py-2 text-lg bg-slate-50" readonly>
           <span class="text-xl font-mono">_</span>
-          <input id="scanNum" class="flex-1 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" maxlength="12" onkeydown="if(event.key==='Enter') lookupParticipant()">
+          <input id="scanNum" class="flex-1 min-w-0 border rounded px-3 py-2 text-lg" placeholder="##### or full scan" maxlength="12" onkeydown="if(event.key==='Enter') lookupParticipant()">
         </div>
         <button onclick="lookupParticipant()" class="bg-blue-600 text-white px-4 py-2 rounded mb-4">Look Up</button>
         <div id="weighForm" class="hidden space-y-3">
@@ -218,9 +219,16 @@
         </div>
         <div id="weighMsg" class="mt-2 text-sm"></div>
       </div>
-      <div class="bg-white rounded-xl shadow p-6">
-        <h3 class="font-semibold mb-2">Recent weigh-ins</h3>
-        <div id="recentCatches" class="space-y-1 text-sm"></div>
+      <div class="bg-white rounded-xl shadow p-4 md:p-6">
+        <div class="flex justify-between items-center gap-2 mb-2">
+          <h3 class="font-semibold">Find / edit tickets</h3>
+          <label class="text-xs text-slate-600 flex items-center gap-1"><input type="checkbox" id="tkShowVoid" onchange="renderRecentCatches()"> Show voided</label>
+        </div>
+        <input id="tkSearch" type="search" enterkeyhint="search" autocomplete="off" oninput="S.tkLimit = 50; renderRecentCatches()"
+          placeholder="Angler name or #, ticket # or code" class="w-full border rounded-lg px-3 py-2 mb-1 text-base">
+        <div id="tkCount" class="text-xs text-slate-500 mb-1"></div>
+        <div id="recentCatches" class="text-sm"></div>
+        <button id="tkMore" onclick="S.tkLimit += 50; renderRecentCatches()" class="hidden w-full mt-2 border rounded-lg py-2 text-sm">Show more</button>
       </div>
     </div>
   </section>
@@ -303,6 +311,51 @@
 </div>
 
 <!-- Sync queue Modal -->
+<div id="ticketModal" class="hidden fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4" onclick="if(event.target===this)closeTicket()">
+  <div class="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-xl p-5 max-h-[92vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="tkTitle">
+    <div class="flex justify-between items-start gap-2 mb-1">
+      <h3 id="tkTitle" class="text-lg font-semibold">Ticket</h3>
+      <button onclick="closeTicket()" class="text-slate-500 text-2xl leading-none px-2" aria-label="Close">&times;</button>
+    </div>
+    <div id="tkMeta" class="text-xs text-slate-500 mb-3"></div>
+    <div id="tkVoided" class="hidden bg-red-50 text-red-800 rounded p-2 text-sm mb-3"></div>
+    <form id="tkForm" class="space-y-3" onsubmit="saveTicket(); return false;">
+      <label class="block text-sm font-medium">Angler
+        <select id="tkAngler" class="mt-1 w-full border rounded px-3 py-2 text-base"></select></label>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="block text-sm font-medium">Species
+          <select id="tkSpecies" class="mt-1 w-full border rounded px-3 py-2 text-base"></select></label>
+        <label class="block text-sm font-medium">Weight (lbs)
+          <input id="tkWeight" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" class="mt-1 w-full border rounded px-3 py-2 text-base"></label>
+      </div>
+      <label class="block text-sm font-medium">Note (optional)
+        <input id="tkNote" maxlength="200" placeholder="e.g. re-weighed, wrong angler scanned" class="mt-1 w-full border rounded px-3 py-2 text-base"></label>
+      <div class="flex flex-wrap gap-2">
+        <button id="tkSave" type="submit" class="flex-1 bg-green-600 text-white py-2 rounded-lg font-semibold">Save changes</button>
+        <button type="button" onclick="reprintTicket()" class="border px-3 py-2 rounded-lg">Reprint</button>
+        <button type="button" onclick="closeTicket()" class="border px-3 py-2 rounded-lg">Cancel</button>
+      </div>
+    </form>
+    <div id="tkMsg" class="mt-2 text-sm"></div>
+    <div class="mt-4 border-t pt-3">
+      <button id="tkVoidBtn" onclick="showVoidConfirm(true)" class="text-red-700 border border-red-300 px-3 py-2 rounded-lg text-sm">Void ticket…</button>
+      <button id="tkRestoreBtn" onclick="restoreTicket()" class="hidden text-blue-700 border border-blue-300 px-3 py-2 rounded-lg text-sm">Restore ticket</button>
+      <div id="tkVoidConfirm" class="hidden mt-2 bg-red-50 rounded-lg p-3 space-y-2">
+        <div class="text-sm text-red-800">Voiding removes this fish from every leaderboard. The ticket is kept (struck through) and can be restored.</div>
+        <input id="tkVoidReason" maxlength="200" placeholder="Reason (required), e.g. duplicate entry" oninput="$('tkVoidGo').disabled = !this.value.trim()" class="w-full border rounded px-3 py-2 text-base">
+        <div class="flex gap-2">
+          <button id="tkVoidGo" disabled onclick="voidTicket()" class="flex-1 bg-red-600 text-white py-2 rounded-lg font-semibold disabled:opacity-40">Yes, void ticket</button>
+          <button onclick="showVoidConfirm(false)" class="border px-3 py-2 rounded-lg">Keep</button>
+        </div>
+      </div>
+    </div>
+    <div class="mt-4">
+      <h4 class="text-sm font-semibold mb-1">Change history</h4>
+      <div id="tkHistory" class="text-xs text-slate-600 space-y-1"></div>
+    </div>
+  </div>
+</div>
+
 <div id="queueModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
   <div class="bg-white rounded-xl p-6 w-full max-w-lg max-h-[80vh] overflow-auto">
     <h3 class="text-lg font-semibold mb-2">Sync queue</h3>
@@ -329,7 +382,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261114e"></script>
-<script src="app.js?v=20261114e"></script>
+<script src="config.js?v=20261115a"></script>
+<script src="app.js?v=20261115a"></script>
 </body>
 </html>

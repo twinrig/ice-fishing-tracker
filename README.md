@@ -144,6 +144,20 @@ Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, mus
 There is no angler check-in step, no fish length and no staff initials. Each weigh-in automatically records the
 signed-in staff account (`recorded_by`) and the station name set on that laptop.
 
+## Finding and editing weigh tickets
+
+Weigh-in tab → **Find / edit tickets** (Weigh Station and Admin). The list shows the newest tickets first; search by
+angler name, angler number (`2027_00012` or just `12`), ticket number (`#42` or `42`), or the code printed on the
+ticket (e.g. `CD0E7848`). Tap a ticket to change the angler, species, weight or add a note, reprint it, or **Void**
+it (a reason is required; voided tickets are struck through, drop off every leaderboard, and can be **Restored**).
+Edits work offline like weigh-ins and sync later; leaderboards update on their own.
+
+- Ticket numbers (#1, #2, …) are per tournament and assigned by the server when the weigh-in syncs (a ticket weighed
+  offline shows `#…` until then; its printed code always works for searching).
+- Weigh staff can edit any ticket in the tournament; Gate can't. The database enforces this.
+- Every edit, void and restore is logged with who (email) and when, showing old → new values (the ticket's
+  "Change history"). The weigh-in CSV export includes ticket number, code, note and last-changed time.
+
 ## Deleting a tournament
 
 Setup → **Danger zone – Delete tournament** (admins only, bottom of the page). The pop-up shows what will be deleted
