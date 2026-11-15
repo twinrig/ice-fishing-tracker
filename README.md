@@ -95,7 +95,8 @@ where role = 'weigh'
 Once you're an admin you can also add roles from the Table Editor (`staff_roles`) or via the API.
 To remove someone completely, delete their user in Authentication → Users (their roles go with it).
 
-4. **Sign in on the site** with "Staff sign in", go to **Setup**, create the tournament (name, year, Age/Division
+4. **Set the admin PIN** (see "Admin PIN" below) – without it nobody can switch into Admin mode.
+5. **Sign in on the site** with "Staff sign in", switch the mode picker to **Admin** (enter the PIN), go to **Setup**, create the tournament (name, year, Age/Division
    names with their age ranges, species), and adjust the leaderboards. Four default boards are created automatically.
    Species and Age/Division boards have the same picker choices:
    - **Each species / Age/Division** – a separate tab (and TV slide) per species or group.
@@ -103,6 +104,33 @@ To remove someone completely, delete their user in Authentication → Users (the
      if it's long) with a separately ranked section per species or group (Walleye, Perch, …).
    - **Any species / Age/Division, combined ranking** – one tab, everyone ranked together.
    - Or pick a single species / group.
+   - **Top**: how many places to show (3–100), or **All** to list everyone with a fish. On the public page and the
+     staff Leaderboard tab, grouped sections can be collapsed by tapping their heading (remembered on that device
+     per board); the Big Screen always shows every section and pages through long lists (11 lines per page).
+     "All" makes the public page download a bit more (one line per angler) – it only re-downloads when the data
+     changes, so the extra is small even with a few hundred anglers.
+
+## Admin PIN
+
+Only a few admin accounts sign in. An admin signs a laptop in, then workers use it in **Gate**, **Weigh** or
+**Big Screen** mode. Switching that laptop into **Admin** mode asks for the admin PIN.
+
+**Set or change the PIN:** Supabase dashboard → **Table Editor**
+(https://supabase.com/dashboard/project/cqnqqjaoeqsdakrdijzr/editor) → schema `public` → table **`app_settings`** →
+the single row (id 1) → double-click the **`admin_pin`** cell → type a PIN of 4–32 characters → Enter / **Save**.
+It takes effect immediately on every laptop. Clear the cell (NULL) to block Admin mode everywhere.
+
+- **No PIN set = Admin mode is refused** (the safer default). The app says "No admin PIN is set yet".
+- The PIN is checked by the database (`verify_admin_pin`); browsers can never read the `app_settings` table.
+- **5 wrong tries → locked for 5 minutes** (per admin account).
+- A correct PIN unlocks Admin for that sign-in on that laptop only. The database itself refuses admin-only changes
+  (Setup, tournament/board edits, deleting a tournament) unless that sign-in is unlocked, so hiding the
+  menu isn't the only protection. Admin accounts can always do Gate / Weigh / Big Screen work without the PIN.
+- **Locks again** when you pick another mode, sign out, after **10 minutes without activity**, or 30 minutes after the
+  last activity check (it's kept alive while you're using it).
+- **Offline:** the PIN can't be checked without internet, so Admin mode can't be entered offline. A laptop that was
+  already unlocked stays in Admin until the unlock time runs out; Gate and Weigh keep working offline as before.
+- On the local VM copy, set the PIN the same way in its Studio (http://192.168.1.127:54323 → Table Editor → `app_settings`).
 
 ## Tournament day checklist
 
@@ -129,12 +157,15 @@ To remove someone completely, delete their user in Authentication → Users (the
 
 ## CSV formats
 
-- **Participants (Setup → Import → Preview → Import):** `name` + optional `age` and/or birth date, `Age/Division`, `email`, `phone`, `id`.
+- **Participants (Setup → Import → Preview → Import):** `name` + optional `age` and/or birth date, `Age/Division`, `email`, `phone`.
+  - Participant numbers are **always assigned automatically**. An `id`/`code`/`participant_id` column in the file is
+    ignored, and the preview says so.
   - Birth date headers (any case): `birthdate`, `birth_date`, `dob`, `date_of_birth`, `birthday`.
   - Date formats: `2014-03-09`, `2014/3/9`, `3/9/2014`, `03/09/2014`, `3/9/14` (US month/day order).
     Two-digit years use the most recent century that isn't after the event date (`1/1/30` = 1930, `3/9/14` = 2014).
-  - If both an age and a birth date are given, the birth date wins and the preview flags any disagreement.
-    A date that can't be read leaves the age blank (or falls back to the age column) and is flagged in the preview.
+  - If both an age and a birth date are given, the **age column wins**; the birth date is only used when the age is
+    blank. The preview flags any disagreement, and in that case the birth date is not saved (the database would
+    otherwise recalculate the age from it). A date that can't be read is flagged and ignored.
   - Nothing is saved until you click **Import** under the preview.
   With an age, the Age/Division is assigned automatically from the ranges (the file's Age/Division is ignored).
   Without an age, the file's Age/Division (if any) is kept as a hand-set choice. Re-importing the same file skips rows already imported.
@@ -171,9 +202,8 @@ changes). Other staff laptops switch away automatically; public links for it sho
 
 `samples/test-anglers.csv` – 40 fake anglers mixing age only, birth date only (mixed formats), both
 (some disagreeing), neither, and bad dates, including the 13/14 and 18/19 boundaries for a 2027-01-23 event.
-Import it into a separate **test tournament**, not a real one. Participant numbers are per tournament, so this
-only affects the tournament you import into: the two rows with fixed ids 2027_00101/00102 move that tournament's
-next number up to 2027_00103.
+Import it into a separate **test tournament**, not a real one. Two rows have ids (2027_00101/00102) to show that ids in
+a file are ignored – every row gets the next automatic number.
 
 ## Backups
 

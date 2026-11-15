@@ -11,7 +11,7 @@ const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
 });
 
-const ROLE_LABEL = { admin: 'Admin', gate: 'Gate / Registration', weigh: 'Weigh Station', screen: 'Big Screen' };
+const ROLE_LABEL = { admin: 'Admin 🔒', gate: 'Gate / Registration', weigh: 'Weigh Station', screen: 'Big Screen' };
 const ROLE_TABS = {
   admin: ['setup', 'participants', 'weighin', 'leaderboard', 'display'],
   gate: ['participants', 'leaderboard', 'display'],
@@ -82,7 +82,11 @@ function msg(id, text, ok = true) { const el = $(id); if (!el) return; el.textCo
 function closeModal(id) { $(id)?.classList.add('hidden'); }
 function openModal(id) { $(id)?.classList.remove('hidden'); }
 function canReadData() { return S.roles.some(r => ['admin', 'gate', 'weigh'].includes(r)); }
-function hasRole(r) { return S.roles.includes('admin') || S.roles.includes(r); }
+// Admin accounts always have gate/weigh/screen rights; admin-only rights need Admin mode (PIN-unlocked).
+function hasRole(r) {
+  if (r === 'admin') return S.roles.includes('admin') && S.role === 'admin';
+  return S.roles.includes('admin') || S.roles.includes(r);
+}
 function parseCSV(text) {
   const rows = []; let row = [], cur = '', q = false;
   for (let i = 0; i < text.length; i++) {
@@ -254,6 +258,8 @@ async function signIn() {
 }
 async function signOut() {
   if (Q.length && !confirm(`${Q.length} change(s) have not synced yet. They stay on this device and sync after the next sign-in. Sign out anyway?`)) return;
+  if (S.role === 'admin') { try { await sb.rpc('lock_admin'); } catch (e) {} }
+  clearAdminLocal();
   await sb.auth.signOut();
 }
 async function onSession(session) {
@@ -263,11 +269,11 @@ async function onSession(session) {
     if (!error) { S.roles = data.map(r => r.role); LS.set('ift.roles.' + S.user.id, S.roles); }
     else S.roles = LS.get('ift.roles.' + S.user.id, []);
   } else S.roles = [];
-  renderAuth();
+  await renderAuth();
   await loadTournamentList();
   if (S.session && !KIOSK) flushQueue();
 }
-function renderAuth() {
+async function renderAuth() {
   const signedIn = !!S.user;
   $('signInBtn').classList.toggle('hidden', signedIn || KIOSK);
   $('signOutBtn').classList.toggle('hidden', !signedIn);
@@ -277,7 +283,9 @@ function renderAuth() {
   rs.innerHTML = roles.map(r => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join('');
   rs.classList.toggle('hidden', !roles.length);
   const saved = LS.get('ift.stationRole', null);
-  const role = roles.includes(saved) ? saved : (roles[0] || 'public');
+  let role = roles.includes(saved) ? saved : (roles[0] || 'public');
+  // Admin mode survives a reload only while this sign-in's PIN unlock is still valid.
+  if (role === 'admin' && !(await adminStillUnlocked())) role = firstWorkerRole(roles);
   if (roles.length) rs.value = role;
   // First render after page load: honour a shared link (?view=leaderboard / #board=…) if this mode can show it.
   // After a real sign-in/out, go to the new mode's home screen.
@@ -289,6 +297,8 @@ function renderAuth() {
 // current tab" made the mode picker look like it did nothing).
 function applyRole(role, silent, wantTab) {
   S.role = role || 'public';
+  if (S.role === 'admin') startAdminWatch(); else stopAdminWatch();
+  if ($('roleSelect').value !== S.role && [...$('roleSelect').options].some(o => o.value === S.role)) $('roleSelect').value = S.role;
   if (!silent && role !== 'public') LS.set('ift.stationRole', role);
   const allowed = ROLE_TABS[S.role] || ROLE_TABS.public;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('hidden', !allowed.includes(b.dataset.tab)));
@@ -296,6 +306,90 @@ function applyRole(role, silent, wantTab) {
   if (BOARD_MODE) return showTab('leaderboard');
   showTab(allowed.includes(wantTab) ? wantTab : allowed[0]);
 }
+
+// ---- Admin PIN: switching INTO Admin mode needs the PIN (checked by the server, which then unlocks admin-only
+// actions for this sign-in for up to 30 min, kept alive while in use). Leaving Admin mode or going idle locks it.
+const ADMIN_IDLE_MIN = 10;
+function firstWorkerRole(roles) { return roles.find(r => r !== 'admin') || 'public'; }
+function adminKey() { return 'ift.adminUntil.' + (S.user?.id || ''); }
+function clearAdminLocal() { LS.del(adminKey()); }
+async function adminStillUnlocked() {
+  if (!S.session) return false;
+  if (!S.online) return LS.get(adminKey(), 0) > Date.now(); // offline reload: trust the last server answer until it expires
+  const { data, error } = await sb.rpc('admin_unlock_status', { p_extend: false });
+  if (error) return isNetErr(error) ? LS.get(adminKey(), 0) > Date.now() : false;
+  if (data?.unlocked) LS.set(adminKey(), Date.parse(data.unlocked_until)); else clearAdminLocal();
+  return !!data?.unlocked;
+}
+function requestRole(role) {
+  if (role === S.role) return;
+  if (role === 'admin') { $('roleSelect').value = S.role; return openAdminPin(); }
+  if (S.role === 'admin') lockAdmin();
+  applyRole(role);
+}
+function openAdminPin() {
+  $('pinInput').value = ''; $('pinMsg').textContent = ''; $('pinGo').disabled = false;
+  openModal('pinModal'); setTimeout(() => $('pinInput').focus(), 0);
+}
+function closeAdminPin() { closeModal('pinModal'); }
+async function submitAdminPin() {
+  const pin = $('pinInput').value.trim(); if (!pin) return;
+  if (!S.online) return msg('pinMsg', 'Admin mode needs an internet connection to check the PIN.', false);
+  $('pinGo').disabled = true; $('pinMsg').className = 'mt-2 text-sm'; $('pinMsg').textContent = 'Checking…';
+  const { data, error } = await sb.rpc('verify_admin_pin', { p_pin: pin });
+  $('pinGo').disabled = false; $('pinInput').value = '';
+  if (error) return msg('pinMsg', isNetErr(error) ? 'Admin mode needs an internet connection to check the PIN.' : error.message, false);
+  if (data?.ok) {
+    LS.set(adminKey(), Date.parse(data.unlocked_until)); closeAdminPin();
+    $('roleMsg').textContent = '';
+    applyRole('admin');
+    return;
+  }
+  const until = data?.locked_until ? new Date(data.locked_until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  const text = {
+    wrong: `Wrong PIN. ${data.remaining} ${data.remaining === 1 ? 'try' : 'tries'} left before a 5-minute lockout.`,
+    locked: `Too many wrong PINs. Try again after ${until}.`,
+    no_pin: 'No admin PIN is set yet. Set it in Supabase: Table Editor → app_settings → admin_pin.',
+    not_admin: 'This account is not an admin.',
+    no_session: 'Please sign out and sign in again.'
+  }[data?.reason] || 'Could not unlock admin mode.';
+  msg('pinMsg', text, false);
+  $('pinInput').focus();
+}
+function lockAdmin(reason) {
+  clearAdminLocal();
+  if (S.session) sb.rpc('lock_admin').then(() => {}, () => {});
+  if (reason) $('roleMsg').textContent = reason;
+}
+function dropToWorkerMode(reason) {
+  if (S.role !== 'admin') return;
+  lockAdmin(reason);
+  const roles = S.roles.includes('admin') ? ['admin', 'gate', 'weigh', 'screen'] : S.roles;
+  applyRole(firstWorkerRole(roles));
+}
+let adminTimer = null, lastActivity = Date.now(), lastKeepAlive = 0;
+['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true }));
+function startAdminWatch() {
+  lastActivity = Date.now(); lastKeepAlive = Date.now();
+  if (adminTimer) return;
+  adminTimer = setInterval(checkAdminWatch, 30000);
+}
+function stopAdminWatch() { clearInterval(adminTimer); adminTimer = null; }
+async function checkAdminWatch() {
+  if (S.role !== 'admin') return stopAdminWatch();
+  if (Date.now() - lastActivity > ADMIN_IDLE_MIN * 60000) return dropToWorkerMode(`Admin mode locked after ${ADMIN_IDLE_MIN} minutes without activity.`);
+  if (Date.now() > LS.get(adminKey(), 0) && !S.online) return dropToWorkerMode('Admin mode expired.');
+  if (S.online && Date.now() - lastKeepAlive > 4 * 60000) {
+    lastKeepAlive = Date.now();
+    const { data, error } = await sb.rpc('admin_unlock_status', { p_extend: true });
+    if (!error && data) {
+      if (data.unlocked) LS.set(adminKey(), Date.parse(data.unlocked_until));
+      else dropToWorkerMode('Admin mode expired – enter the PIN again.');
+    }
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.role === 'admin') { if (Date.now() - lastActivity > ADMIN_IDLE_MIN * 60000) dropToWorkerMode(`Admin mode locked after ${ADMIN_IDLE_MIN} minutes without activity.`); else checkAdminWatch(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('pinModal').classList.contains('hidden')) closeAdminPin(); });
 
 // ---------------------------------------------------------------- tournaments
 async function loadTournamentList() {
@@ -669,11 +763,16 @@ function renderConfigs() {
         <option value="total_weight" ${c.scoring === 'total_weight' ? 'selected' : ''}>Total weight</option>
         <option value="biggest_fish" ${c.scoring === 'biggest_fish' ? 'selected' : ''}>Biggest fish</option>
       </select>
-      <label>Top <input class="cf-top border rounded px-2 py-1 w-14" type="number" min="1" max="100" value="${c.top_n}"></label>
+      <label>Top <select class="cf-top border rounded px-2 py-1">${topOptions(c.top_n)}</select></label>
       <label class="flex items-center gap-1"><input class="cf-enabled" type="checkbox" ${c.enabled ? 'checked' : ''}> On</label>
       <button onclick="saveBoardConfig('${c.id}')" class="bg-blue-600 text-white px-2 py-1 rounded">Save</button>
       <button onclick="deleteBoardConfig('${c.id}')" class="border px-2 py-1 rounded text-red-700">Delete</button>
     </div>`).join('') || '<p class="text-slate-500">No leaderboards configured.</p>';
+}
+function topOptions(cur) {
+  const vals = [3, 5, 10, 15, 20, 25, 50, 100];
+  if (cur != null && !vals.includes(cur)) vals.push(cur), vals.sort((x, y) => x - y);
+  return `<option value="all" ${cur == null ? 'selected' : ''}>All</option>` + vals.map(v => `<option value="${v}" ${v === cur ? 'selected' : ''}>${v}</option>`).join('');
 }
 async function saveBoardConfig(id) {
   const row = document.querySelector(`[data-id="${id}"]`);
@@ -681,7 +780,7 @@ async function saveBoardConfig(id) {
   const special = raw in SPLIT_OPTS, filter = special ? null : raw;
   const patch = {
     title: row.querySelector('.cf-title').value.trim() || 'Leaderboard', board_type: type,
-    scoring: row.querySelector('.cf-scoring').value, top_n: parseInt(row.querySelector('.cf-top').value, 10) || 10,
+    scoring: row.querySelector('.cf-scoring').value, top_n: row.querySelector('.cf-top').value === 'all' ? null : (parseInt(row.querySelector('.cf-top').value, 10) || 10),
     sort_order: parseInt(row.querySelector('.cf-order').value, 10) || 0, enabled: row.querySelector('.cf-enabled').checked,
     split_mode: type !== 'overall' && special ? SPLIT_OPTS[raw] : 'tabs',
     species_id: type === 'species' ? filter : null, age_group: type === 'age_group' ? filter : null
@@ -754,7 +853,7 @@ async function buildImportPlan(text, t, existing) {
   const ni = h.findIndex((x, i) => x.includes('name') && i !== bi), yi = headerIndex(h, 'age', 'ageyears', 'years');
   const ai = h.findIndex(x => x.includes('division') || x.includes('group'));
   const ei = headerIndex(h, 'email', 'emailaddress'), pi = headerIndex(h, 'phone', 'phonenumber', 'cell');
-  const ci = headerIndex(h, 'id', 'code', 'participantid', 'participantcode', 'number');
+  const ci = headerIndex(h, 'id', 'code', 'participantid', 'participantcode', 'number'); // ignored: numbers are always assigned
   if (ni === -1) return { error: 'CSV must have a "name" column.' };
   const asOf = asOfDate(t), seen = new Set(existing), plan = [];
   for (const [n, r] of rows.slice(1).entries()) {
@@ -762,7 +861,8 @@ async function buildImportPlan(text, t, existing) {
     const item = { line: n + 2, name, warnings: [], status: 'new' };
     plan.push(item);
     if (!name) { item.status = 'skip'; item.warnings.push('no name – skipped'); continue; }
-    item.code = ci >= 0 && r[ci] ? normCode(t.year, r[ci]) : null;
+    item.code = null; // participant numbers are always assigned by the server
+    if (ci >= 0 && (r[ci] || '').trim()) item.ignoredId = r[ci].trim();
     item.email = ei >= 0 ? r[ei] || null : null; item.phone = pi >= 0 ? r[pi] || null : null;
     item.id = await hashUuid([t.id, name.toLowerCase(), (item.email || '').toLowerCase(), item.phone || '', item.code || ''].join('|'));
     if (seen.has(item.id)) { item.status = 'already'; item.warnings.push('already imported – skipped'); continue; }
@@ -775,15 +875,19 @@ async function buildImportPlan(text, t, existing) {
     if (b.error) item.warnings.push(b.error + (fileAge != null ? ' – using the age column' : ' – age left blank'));
     item.birth = b.date || null;
     const birthAge = item.birth ? ageOn(item.birth, asOf) : null;
-    if (birthAge != null && fileAge != null && birthAge !== fileAge) item.warnings.push(`age column says ${fileAge}, birth date gives ${birthAge} on ${asOf} – using birth date`);
-    item.age = birthAge ?? fileAge;
+    if (birthAge != null && fileAge != null && birthAge !== fileAge) {
+      // The database derives age from a stored birth date, so keep the birth date out when the age column wins.
+      item.warnings.push(`age column says ${fileAge}, birth date gives ${birthAge} on ${asOf} – using the age column (birth date not saved)`);
+      item.birth = null;
+    }
+    item.age = fileAge ?? birthAge;
     const fileDiv = ai >= 0 ? (r[ai] || null) : null;
     item.manual = item.age == null && !!fileDiv;
     item.division = item.manual ? fileDiv : divisionForAge(t, item.age);
     if (item.age == null && !item.birthRaw && !item.ageRaw) item.warnings.push(fileDiv ? `no age or birth date – using "${fileDiv}" from the file (set by hand)` : 'no age or birth date');
     if (!item.division) item.warnings.push(item.age == null ? 'no Age/Division (age unknown)' : `no Age/Division matches age ${item.age}`);
   }
-  return { plan, asOf, hasBirth: bi >= 0, hasAge: yi >= 0 };
+  return { plan, asOf, hasBirth: bi >= 0, hasAge: yi >= 0, idsIgnored: plan.filter(p => p.ignoredId).length, idHeader: ci >= 0 ? rows[0][ci] : null };
 }
 
 async function previewParticipantsCSV() {
@@ -795,7 +899,8 @@ async function previewParticipantsCSV() {
   const plan = res.plan, newRows = plan.filter(p => p.status === 'new'), warned = newRows.filter(p => p.warnings.length);
   $('importMsg').textContent = '';
   $('importSummary').innerHTML = `${plan.length} rows • <b>${newRows.length} to import</b> • ${plan.length - newRows.length} skipped • `
-    + `<span class="${warned.length ? 'text-amber-700 font-medium' : ''}">${warned.length} with warnings</span> • ages as of ${esc(res.asOf)}${S.t.event_date ? ' (event date)' : ' (today – no event date set)'}`;
+    + `<span class="${warned.length ? 'text-amber-700 font-medium' : ''}">${warned.length} with warnings</span> • ages as of ${esc(res.asOf)}${S.t.event_date ? ' (event date)' : ' (today – no event date set)'}`
+    + (res.idHeader ? `<div class="mt-1 text-slate-600">Note: the file's “${esc(res.idHeader)}” column is ignored${res.idsIgnored ? ` (${res.idsIgnored} value${res.idsIgnored === 1 ? '' : 's'})` : ''} – participant numbers are always assigned automatically.</div>` : '');
   $('importRows').innerHTML = plan.map(p => `<tr class="border-t ${p.status !== 'new' ? 'text-slate-400' : p.warnings.length ? 'bg-amber-50' : ''}">
       <td class="p-1">${p.line}</td><td class="p-1">${esc(p.name)}</td><td class="p-1">${esc(p.ageRaw || '')}</td><td class="p-1">${esc(p.birthRaw || '')}</td>
       <td class="p-1 font-medium">${p.age ?? ''}</td><td class="p-1">${p.division ? esc(p.division) + (p.manual ? ' <span class="text-amber-700">(by hand)</span>' : '') : (p.status === 'new' ? '<span class="text-red-700">—</span>' : '')}</td>
@@ -1186,7 +1291,7 @@ function computeBoards() {
       .filter(x => x.p && (!ageGroup || x.p.age_group === ageGroup))
       .sort((a, b) => b.lbs - a.lbs || a.p.display_name.localeCompare(b.p.display_name));
     let rank = 0;
-    return list.slice(0, topN).map((x, i) => { if (i === 0 || x.lbs !== list[i - 1].lbs) rank = i + 1; return { rank, name: x.p.display_name, group: x.p.age_group, fish: x.fish, lbs: x.lbs }; });
+    return (topN ? list.slice(0, topN) : list).map((x, i) => { if (i === 0 || x.lbs !== list[i - 1].lbs) rank = i + 1; return { rank, name: x.p.display_name, group: x.p.age_group, fish: x.fish, lbs: x.lbs }; });
   };
   const boards = [];
   for (const c of S.configs.filter(c => c.enabled).sort((a, b) => a.sort_order - b.sort_order)) {
@@ -1205,6 +1310,18 @@ function boardHasData(b) { return boardSections(b).some(s => s.rows.length); }
 function rowsHtml(rows, compact) {
   return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)} <span class="text-slate-400 text-sm">${esc(r.group || '')}</span></span><span class="font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('')
     || `<div class="text-sm text-slate-500 ${compact ? 'px-2 py-1' : ''}">No fish yet</div>`;
+}
+// Collapsed group sections on grouped boards, remembered per tournament + board on this device.
+function collapsedGroups() { return LS.get('ift.collapsed', {}); }
+function groupKey(boardSlug, name) { return `${S.tid}|${boardSlug}|${name}`; }
+function toggleGroup(btn) {
+  const all = collapsedGroups(), key = btn.dataset.key;
+  if (all[key]) delete all[key]; else all[key] = 1;
+  LS.set('ift.collapsed', all);
+  const open = !all[key];
+  btn.setAttribute('aria-expanded', open);
+  btn.nextElementSibling.classList.toggle('hidden', !open);
+  btn.querySelector('svg').classList.toggle('-rotate-90', !open);
 }
 // Selected leaderboard tab lives in the URL hash (#board=<slug>) so it can be shared.
 function currentBoardSlug() { const m = location.hash.match(/board=([^&]+)/); return m ? decodeURIComponent(m[1]) : null; }
@@ -1238,11 +1355,16 @@ function renderLeaderboard() {
   const b = boards[idx];
   $('boardContent').innerHTML = `
     <div class="text-xs text-slate-500 mb-2">${b.scoring === 'biggest_fish' ? 'Biggest single fish' : 'Total weight'}</div>
-    ${b.groups ? b.groups.map(g => `
-      <section class="mb-4">
-        <h3 class="sticky top-0 bg-slate-100 text-slate-800 font-semibold text-sm uppercase tracking-wide px-2 py-1 rounded">${esc(g.name)}</h3>
-        ${rowsHtml(g.rows, true)}
-      </section>`).join('') || '<div class="text-sm text-slate-500">No sections</div>' : rowsHtml(b.rows)}`;
+    ${b.groups ? b.groups.map(g => {
+      const key = groupKey(slugs[idx], g.name), shut = !!collapsedGroups()[key];
+      return `<section class="mb-3">
+        <button type="button" data-key="${esc(key)}" onclick="toggleGroup(this)" aria-expanded="${!shut}"
+          class="sticky top-0 w-full flex items-center justify-between gap-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-sm uppercase tracking-wide px-2 py-2 rounded text-left">
+          <span>${esc(g.name)} <span class="normal-case font-normal text-slate-500">(${g.rows.length})</span></span>
+          <svg class="w-4 h-4 transition-transform ${shut ? '-rotate-90' : ''}" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
+        </button>
+        <div class="${shut ? 'hidden' : ''}">${rowsHtml(g.rows, true)}</div>
+      </section>`; }).join('') || '<div class="text-sm text-slate-500">No sections</div>' : rowsHtml(b.rows)}`;
   const active = $('boardTabs').children[idx];
   if (active && S.lastBoardIdx !== idx) { const c = $('boardTabs'); c.scrollLeft = active.offsetLeft - (c.clientWidth - active.offsetWidth) / 2; S.lastBoardIdx = idx; }
 }
