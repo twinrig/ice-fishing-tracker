@@ -213,9 +213,10 @@
         <button onclick="lookupParticipant()" class="bg-blue-600 text-white px-4 py-2 rounded mb-4">Look Up</button>
         <div id="weighForm" class="hidden space-y-3">
           <div id="pInfo" class="bg-slate-50 p-3 rounded font-medium"></div>
-          <select id="species" class="w-full border rounded px-3 py-2"></select>
+          <select id="species" class="w-full border rounded px-3 py-2" onchange="checkDuplicateSpecies()"></select>
           <label class="block text-sm font-medium">Weight (lbs, decimals OK)</label>
-          <input id="weightLbs" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" placeholder="e.g. 2.35" class="w-full border rounded px-3 py-2 text-lg" onkeydown="if(event.key==='Enter') submitWeighIn()">
+          <input id="weightLbs" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" placeholder="e.g. 2.35" class="w-full border rounded px-3 py-2 text-lg" oninput="checkDuplicateSpecies()" onkeydown="if(event.key==='Enter') submitWeighIn()">
+          <div id="dupBox" class="hidden bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3"></div>
           <button onclick="submitWeighIn()" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold">Submit & Print Ticket</button>
         </div>
         <div id="weighMsg" class="mt-2 text-sm"></div>
@@ -225,6 +226,7 @@
           <h3 class="font-semibold">Find / edit tickets</h3>
           <label class="text-xs text-slate-600 flex items-center gap-1"><input type="checkbox" id="tkShowVoid" onchange="renderRecentCatches()"> Show voided</label>
         </div>
+        <div id="heldTickets" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 mb-3 text-sm"></div>
         <input id="tkSearch" type="search" enterkeyhint="search" autocomplete="off" oninput="S.tkLimit = 50; renderRecentCatches()"
           placeholder="Angler name or #, ticket # or code" class="w-full border rounded-lg px-3 py-2 mb-1 text-base">
         <div id="tkCount" class="text-xs text-slate-500 mb-1"></div>
@@ -397,7 +399,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261115b"></script>
-<script src="app.js?v=20261115b"></script>
+<script src="config.js?v=20261117a"></script>
+<script src="app.js?v=20261117a"></script>
 </body>
 </html>

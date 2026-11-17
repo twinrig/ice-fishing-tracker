@@ -188,14 +188,17 @@ async function flushQueue(manual) {
   if (flushing) return;
   if (!S.session) { renderConn(); return; }
   flushing = true;
-  let authRetry = 0;
+  let authRetry = 0, heldSeen = false;
   try {
     while (Q.length) {
       const op = Q[0];
       let res;
       try {
         if (op.kind === 'insert') {
-          res = await sb.from(op.table).upsert(op.row, { onConflict: 'id', ignoreDuplicates: true });
+          res = op.table === 'catches'
+            ? await sb.from('catches').upsert(op.row, { onConflict: 'id', ignoreDuplicates: true }).select('id, status, ticket_no, void_reason')
+            : await sb.from(op.table).upsert(op.row, { onConflict: 'id', ignoreDuplicates: true });
+          if (!res.error && op.table === 'catches' && res.data?.[0]) { op.server = res.data[0]; if (op.server.status === 'held') heldSeen = true; }
         } else {
           res = await sb.from(op.table).update(op.patch).eq('id', op.id).select('id');
           if (!res.error && (!res.data || !res.data.length)) res = { error: { code: 'NOROWS', message: 'Not permitted, or the row does not exist' } };
@@ -214,7 +217,11 @@ async function flushQueue(manual) {
       FAILED.push(op); Q.shift(); saveQueue();
       markSynced(op, true);
     }
-  } finally { flushing = false; renderConn(); if (manual) renderQueue(); }
+  } finally {
+    flushing = false; renderConn(); if (manual) renderQueue();
+    // A weigh-in was held as a duplicate species: fetch the other laptop's ticket so staff can choose.
+    if (heldSeen && S.tid && canReadData()) loadTournamentData();
+  }
 }
 
 function markSynced(op, failed) {
@@ -222,7 +229,7 @@ function markSynced(op, failed) {
   const arr = op.table === 'participants' ? S.participants : S.catches;
   const id = op.kind === 'insert' ? op.row.id : op.id;
   const r = arr.find(x => x.id === id);
-  if (r) { if (failed) r._failed = true; if (!Q.some(q => (q.row?.id || q.id) === id)) delete r._pending; }
+  if (r) { if (failed) r._failed = true; if (op.server) Object.assign(r, op.server); if (!Q.some(q => (q.row?.id || q.id) === id)) delete r._pending; }
   saveCache(); refreshViews();
 }
 
@@ -545,7 +552,7 @@ function newTournamentForm() {
   $('setupTitle').textContent = 'New Tournament';
   $('tName').value = ''; $('tYear').value = new Date().getFullYear(); $('tDate').value = '';
   $('tStatus').value = 'setup'; $('tPublic').checked = true;
-  renderDivisionRows([{ name: 'Youth', min: null, max: 17 }, { name: 'Adult', min: 18, max: 64 }, { name: 'Senior', min: 65, max: null }]);
+  renderDivisionRows([{ name: '12 & Under', min: null, max: 12 }, { name: '13-17', min: 13, max: 17 }]); // adults (18+) are only in Overall
   $('speciesList').value = 'Walleye, Perch, Pike, Crappie';
   $('setupMsg').textContent = ''; $('publicLinks').innerHTML = '';
   $('dangerZone').classList.add('hidden');
@@ -615,8 +622,26 @@ function divisionForAge(t, age) {
   const d = divisionsOf(t).find(d => (d.min != null || d.max != null) && (d.min == null || age >= d.min) && (d.max == null || age <= d.max));
   return d ? d.name : null;
 }
+// Everybody is in Overall. Age/Divisions only cover some ages (e.g. 12 & Under, 13-17); anyone older than the
+// oldest range is "Overall only" – that's normal, not an error.
+function overallOnlyAge(t, age) {
+  if (age == null) return false;
+  const ds = divisionsOf(t).filter(d => d.min != null || d.max != null);
+  return ds.length > 0 && ds.every(d => d.max != null) && age > Math.max(...ds.map(d => d.max));
+}
+// 'ok' | 'overall' (adult, Overall only) | 'noage' | 'nomatch' (an age no range covers, e.g. a gap)
+function divisionState(p, t = S.t) {
+  if (p.age_group) return 'ok';
+  if (p.age == null) return 'noage';
+  return overallOnlyAge(t, p.age) ? 'overall' : 'nomatch';
+}
+function needsDivisionFix(p) { const s = divisionState(p); return s === 'noage' || s === 'nomatch'; }
+function divisionText(p) { return p.age_group || (divisionState(p) === 'overall' ? 'Overall only' : 'No Age/Division'); }
 function divisionLabel(p) {
-  if (!p.age_group) return `<span class="text-red-700 font-medium">⚠ No Age/Division${p.age == null ? ' (age missing)' : ''}</span>`;
+  const st = divisionState(p);
+  if (st === 'overall') return '<span class="text-slate-600">Overall only (adult)</span>';
+  if (st === 'noage') return '<span class="text-red-700 font-medium">⚠ Age missing – needed for the age categories</span>';
+  if (st === 'nomatch') return `<span class="text-red-700 font-medium">⚠ No Age/Division matches age ${p.age}</span>`;
   const unknown = S.t && !(S.t.age_groups || []).includes(p.age_group);
   return esc(p.age_group) + (p.age_group_override ? ' <span class="text-xs bg-amber-100 text-amber-800 px-1 rounded">set by hand</span>' : '')
     + (unknown ? ' <span class="text-xs bg-red-100 text-red-800 px-1 rounded">not in this tournament\'s Age/Division list</span>' : '');
@@ -759,10 +784,10 @@ function renderConfigs() {
         ${['overall', 'species', 'age_group'].map(t => `<option value="${t}" ${c.board_type === t ? 'selected' : ''}>${{ overall: 'Overall', species: 'Species', age_group: 'Age/Division' }[t]}</option>`).join('')}
       </select>
       <select class="cf-filter border rounded px-2 py-1">${filterOpts(c)}</select>
-      <select class="cf-scoring border rounded px-2 py-1">
-        <option value="total_weight" ${c.scoring === 'total_weight' ? 'selected' : ''}>Total weight</option>
-        <option value="biggest_fish" ${c.scoring === 'biggest_fish' ? 'selected' : ''}>Biggest fish</option>
-      </select>
+      <label class="text-sm">Metric <select class="cf-scoring border rounded px-2 py-1" title="Total weight = each angler's fish added up (one per species). Biggest fish = their single heaviest fish.">
+        <option value="total_weight" ${c.scoring === 'total_weight' ? 'selected' : ''}>Total weight (one fish per species)</option>
+        <option value="biggest_fish" ${c.scoring === 'biggest_fish' ? 'selected' : ''}>Biggest single fish</option>
+      </select></label>
       <label>Top <select class="cf-top border rounded px-2 py-1">${topOptions(c.top_n)}</select></label>
       <label class="flex items-center gap-1"><input class="cf-enabled" type="checkbox" ${c.enabled ? 'checked' : ''}> On</label>
       <button onclick="saveBoardConfig('${c.id}')" class="bg-blue-600 text-white px-2 py-1 rounded">Save</button>
@@ -881,11 +906,16 @@ async function buildImportPlan(text, t, existing) {
       item.birth = null;
     }
     item.age = fileAge ?? birthAge;
-    const fileDiv = ai >= 0 ? (r[ai] || null) : null;
+    let fileDiv = ai >= 0 ? ((r[ai] || '').trim() || null) : null;
+    if (fileDiv && !(t.age_groups || []).includes(fileDiv)) {
+      if (item.age == null) item.warnings.push(`Age/Division "${fileDiv}" isn't one of this tournament's (${(t.age_groups || []).join(', ')}) – ignored`);
+      fileDiv = null;
+    }
     item.manual = item.age == null && !!fileDiv;
     item.division = item.manual ? fileDiv : divisionForAge(t, item.age);
     if (item.age == null && !item.birthRaw && !item.ageRaw) item.warnings.push(fileDiv ? `no age or birth date – using "${fileDiv}" from the file (set by hand)` : 'no age or birth date');
-    if (!item.division) item.warnings.push(item.age == null ? 'no Age/Division (age unknown)' : `no Age/Division matches age ${item.age}`);
+    item.overallOnly = !item.division && overallOnlyAge(t, item.age);
+    if (!item.division && !item.overallOnly) item.warnings.push(item.age == null ? 'no Age/Division (age unknown)' : `no Age/Division matches age ${item.age}`);
   }
   return { plan, asOf, hasBirth: bi >= 0, hasAge: yi >= 0, idsIgnored: plan.filter(p => p.ignoredId).length, idHeader: ci >= 0 ? rows[0][ci] : null };
 }
@@ -903,7 +933,7 @@ async function previewParticipantsCSV() {
     + (res.idHeader ? `<div class="mt-1 text-slate-600">Note: the file's “${esc(res.idHeader)}” column is ignored${res.idsIgnored ? ` (${res.idsIgnored} value${res.idsIgnored === 1 ? '' : 's'})` : ''} – participant numbers are always assigned automatically.</div>` : '');
   $('importRows').innerHTML = plan.map(p => `<tr class="border-t ${p.status !== 'new' ? 'text-slate-400' : p.warnings.length ? 'bg-amber-50' : ''}">
       <td class="p-1">${p.line}</td><td class="p-1">${esc(p.name)}</td><td class="p-1">${esc(p.ageRaw || '')}</td><td class="p-1">${esc(p.birthRaw || '')}</td>
-      <td class="p-1 font-medium">${p.age ?? ''}</td><td class="p-1">${p.division ? esc(p.division) + (p.manual ? ' <span class="text-amber-700">(by hand)</span>' : '') : (p.status === 'new' ? '<span class="text-red-700">—</span>' : '')}</td>
+      <td class="p-1 font-medium">${p.age ?? ''}</td><td class="p-1">${p.division ? esc(p.division) + (p.manual ? ' <span class="text-amber-700">(by hand)</span>' : '') : (p.status === 'new' ? (p.overallOnly ? '<span class="text-slate-500">Overall only</span>' : '<span class="text-red-700">—</span>') : '')}</td>
       <td class="p-1 ${p.status === 'new' ? 'text-amber-800' : ''}">${p.warnings.map(esc).join('; ')}</td></tr>`).join('');
   $('importGo').textContent = `Import ${newRows.length}`;
   $('importGo').disabled = !newRows.length;
@@ -1030,7 +1060,8 @@ function updateDivisionPreview() {
   if ($('wAge').value) { el.innerHTML = `<span class="text-amber-800">Age/Division set by hand: ${esc($('wAge').value)}</span>`; return; }
   const age = readAge($('wYears').value), d = divisionForAge(S.t, age);
   el.innerHTML = d ? `<span class="text-green-700">Age/Division: ${esc(d)}</span>`
-    : `<span class="text-red-700">⚠ ${age == null ? 'Enter an age to assign the Age/Division' : 'No Age/Division matches age ' + age}</span>`;
+    : overallOnlyAge(S.t, age) ? '<span class="text-slate-600">Adult – Overall only (no age category)</span>'
+    : `<span class="text-red-700">⚠ ${age == null ? 'Enter an age to place them in an age category' : 'No Age/Division matches age ' + age}</span>`;
 }
 function saveParticipantModal() {
   const name = $('wName').value.trim(); if (!name) return;
@@ -1057,10 +1088,11 @@ function renderParticipants() {
   const el = $('participantList'); if (!el) return;
   if (!canReadData()) { el.innerHTML = '<p class="text-slate-500">Sign in as gate or admin staff.</p>'; return; }
   const f = $('partFilter').value.trim().toLowerCase();
-  const list = S.participants.filter(p => f === '!' ? !p.age_group : !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
+  const list = S.participants.filter(p => f === '!' ? needsDivisionFix(p) : !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
     .sort((a, b) => (a.participant_code || 'z').localeCompare(b.participant_code || 'z'));
-  const noDiv = S.participants.filter(p => !p.age_group).length;
-  $('partCount').innerHTML = `${S.participants.length} registered` + (noDiv ? ` • <button class="text-red-700 underline" onclick="$('partFilter').value='!';renderParticipants()">${noDiv} without Age/Division</button>` : '');
+  const noDiv = S.participants.filter(needsDivisionFix).length, adults = S.participants.filter(p => divisionState(p) === 'overall').length;
+  $('partCount').innerHTML = `${S.participants.length} registered` + (adults ? ` • ${adults} adult${adults === 1 ? '' : 's'} (Overall only)` : '')
+    + (noDiv ? ` • <button class="text-red-700 underline" onclick="$('partFilter').value='!';renderParticipants()">${noDiv} need an age</button>` : '');
   el.innerHTML = list.slice(0, 300).map(p => `
     <div class="flex justify-between items-center border rounded p-3 ${p._failed ? 'border-red-400' : ''}">
       <div>
@@ -1079,7 +1111,7 @@ function findParticipant() {
   if (!code) return msg('findResult', 'Enter a participant number', false);
   const p = S.participants.find(x => x.participant_code === code);
   if (!p) return msg('findResult', 'Not found: ' + code, false);
-  msg('findResult', `Found: ${p.display_name} (${p.age_group || ''})`);
+  msg('findResult', `Found: ${p.display_name} (${divisionText(p)})`);
   $('partFilter').value = code; renderParticipants();
   $('checkNum').value = '';
   printParticipantCard(p);
@@ -1131,27 +1163,54 @@ function lookupParticipant() {
   if (!p) return msg('weighMsg', 'Participant not found: ' + code, false);
   S.currentParticipant = p;
   $('weighForm').classList.remove('hidden');
-  $('pInfo').textContent = `${p.display_name} • ${p.age_group || 'No Age/Division'} • ${code}`;
+  $('pInfo').textContent = `${p.display_name} • ${divisionText(p)} • ${code}`;
   $('weighMsg').textContent = '';
-  populateSelects();
+  populateSelects(); checkDuplicateSpecies();
   $('scanNum').value = ''; $('weightLbs').focus();
 }
-function submitWeighIn() {
+// One fish per species: the angler's active ticket for that species (if any).
+function activeTicketFor(participantId, speciesId, exceptId) {
+  return S.catches.find(c => c.status === 'active' && c.participant_id === participantId && c.species_id === speciesId && c.id !== exceptId);
+}
+function speciesName(id) { return S.species.find(s => s.id === id)?.name || 'that species'; }
+function checkDuplicateSpecies() {
+  const p = S.currentParticipant, box = $('dupBox'); if (!box) return;
+  const old = p && activeTicketFor(p.id, $('species').value);
+  box.classList.toggle('hidden', !old);
+  if (!old) { box.innerHTML = ''; return; }
+  const w = round2(parseFloat($('weightLbs').value));
+  const bigger = w > 0 ? w > round2(old.weight_lbs) : null;
+  box.innerHTML = `<div class="font-semibold">Already has a ${esc(speciesName(old.species_id))}: ticket ${ticketLabel(old)} – ${formatLbs(old.weight_lbs)}</div>
+    <div class="text-sm mb-2">Only one fish per species counts. Replacing voids ${ticketLabel(old)}.${bigger === false ? ` <b>This fish is not bigger.</b>` : ''}</div>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" id="dupReplace" onclick="submitWeighIn('${old.id}')" class="${bigger === false ? 'border border-amber-600 text-amber-900' : 'bg-amber-600 text-white'} px-3 py-2 rounded-lg font-semibold">Replace ${ticketLabel(old)} with this fish</button>
+      <button type="button" onclick="cancelWeighIn()" class="border px-3 py-2 rounded-lg">Keep ${ticketLabel(old)} – don't record</button>
+    </div>`;
+}
+function cancelWeighIn() {
+  $('weightLbs').value = ''; $('weighForm').classList.add('hidden'); S.currentParticipant = null;
+  msg('weighMsg', 'Not recorded.'); $('scanNum').focus();
+}
+function submitWeighIn(replaceId) {
   const p = S.currentParticipant; if (!p) return;
   const total = round2(parseFloat($('weightLbs').value));
   if (!(total > 0)) return msg('weighMsg', 'Enter a weight in pounds (e.g. 2.35)', false);
   if (total > 500) return msg('weighMsg', 'Weight must be 500 lbs or less', false);
   if (!$('species').value) return msg('weighMsg', 'No species set up for this tournament', false);
+  const old = activeTicketFor(p.id, $('species').value);
+  if (old && replaceId !== old.id) { checkDuplicateSpecies(); return msg('weighMsg', `${p.display_name} already has a ${speciesName(old.species_id)} (${ticketLabel(old)}). Replace it or keep it.`, false); }
   const row = {
     id: uuid(), tournament_id: S.tid, participant_id: p.id, species_id: $('species').value, weight_lbs: total,
-    station: $('stationName').value.trim() || null, weighed_at: new Date().toISOString(), source: 'station', status: 'active'
+    station: $('stationName').value.trim() || null, weighed_at: new Date().toISOString(), source: 'station', status: 'active',
+    ...(old ? { replaces: old.id } : {})
   };
+  if (old) { old.status = 'voided'; old.void_reason = 'Replaced by a new weigh-in'; } // the server voids it when this syncs
   enqueue({ kind: 'insert', table: 'catches', row: { ...row } });
   const local = S.catches.find(c => c.id === row.id); if (local) local.recorded_by = S.user?.id;
   printWeighTicket(p, row);
   $('weightLbs').value = '';
-  $('weighForm').classList.add('hidden'); S.currentParticipant = null;
-  msg('weighMsg', `Recorded ${formatLbs(total)} for ${p.display_name}`);
+  $('weighForm').classList.add('hidden'); S.currentParticipant = null; checkDuplicateSpecies();
+  msg('weighMsg', `Recorded ${formatLbs(total)} for ${p.display_name}${old ? ` – replaces ${ticketLabel(old)}` : ''}`);
   $('scanNum').focus();
 }
 // ---- Find / edit weigh tickets (weigh + admin). Edits go through the offline queue as absolute-value updates.
@@ -1175,19 +1234,20 @@ function renderRecentCatches() {
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
   const q = ($('tkSearch')?.value || '').trim(), showVoid = $('tkShowVoid')?.checked;
   const limit = S.tkLimit || 50;
+  renderHeldTickets(pById, sById);
   const all = S.catches.filter(c => (showVoid || c.status !== 'voided' || q) && ticketMatches(c, q, pById[c.participant_id], sById[c.species_id]))
     .sort((a, b) => (b.weighed_at || '').localeCompare(a.weighed_at || '') || (b.ticket_no || 1e9) - (a.ticket_no || 1e9));
   const list = all.slice(0, limit), edit = canEditTickets();
   $('tkCount').textContent = q ? `${all.length} match${all.length === 1 ? '' : 'es'}` : `${S.catches.length} ticket${S.catches.length === 1 ? '' : 's'} • newest first`;
   $('tkMore').classList.toggle('hidden', all.length <= limit);
   el.innerHTML = list.map(c => {
-    const p = pById[c.participant_id], v = c.status === 'voided';
+    const p = pById[c.participant_id], v = c.status === 'voided', held = c.status === 'held';
     const edited = c.updated_at && c.created_at && (new Date(c.updated_at) - new Date(c.created_at) > 2000);
     const inner = `<div class="flex justify-between items-start gap-2">
         <div class="min-w-0">
           <div class="font-medium truncate ${v ? 'line-through text-slate-400' : ''}">${esc(p?.display_name || '?')} <span class="text-xs text-slate-500 font-mono">${esc(p?.participant_code || '')}</span></div>
           <div class="text-xs text-slate-500">${ticketLabel(c)} • ${new Date(c.weighed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${esc(sById[c.species_id]?.name || '')}${c.station ? ' • ' + esc(c.station) : ''}
-            ${v ? '<span class="text-red-700">• voided</span>' : ''}${edited && !v ? ' • <span class="text-blue-700">edited</span>' : ''}${c._pending ? ' • <span class="text-amber-700">not synced</span>' : ''}${c._failed ? ' • <span class="text-red-700">sync failed</span>' : ''}</div>
+            ${v ? '<span class="text-red-700">• voided</span>' : ''}${held ? '<span class="text-amber-700 font-medium">• held – duplicate species</span>' : ''}${edited && !v ? ' • <span class="text-blue-700">edited</span>' : ''}${c._pending ? ' • <span class="text-amber-700">not synced</span>' : ''}${c._failed ? ' • <span class="text-red-700">sync failed</span>' : ''}</div>
           ${c.note ? `<div class="text-xs text-slate-600 italic truncate">${esc(c.note)}</div>` : ''}
         </div>
         <div class="font-bold whitespace-nowrap ${v ? 'line-through text-slate-400' : ''}">${formatLbs(c.weight_lbs)}</div>
@@ -1196,6 +1256,38 @@ function renderRecentCatches() {
       : `<div class="border-b py-2 px-1">${inner}</div>`;
   }).join('') || `<p class="text-slate-500 py-2">${q ? 'No tickets match.' : 'No weigh-ins yet.'}</p>`;
   if (S.ticketId && !$('ticketModal').classList.contains('hidden')) refreshTicketHeader();
+}
+// Tickets the server held back because the angler already had that species (e.g. weighed on two laptops while
+// one was offline). Staff choose which one counts.
+function renderHeldTickets(pById, sById) {
+  const el = $('heldTickets'); if (!el) return;
+  const held = S.catches.filter(c => c.status === 'held');
+  el.classList.toggle('hidden', !held.length);
+  if (!held.length) { el.innerHTML = ''; return; }
+  const edit = canEditTickets();
+  el.innerHTML = `<div class="font-semibold text-amber-900 mb-1">⚠ ${held.length} ticket${held.length === 1 ? '' : 's'} need${held.length === 1 ? 's' : ''} a decision – one fish per species</div>`
+    + held.map(c => {
+      const other = activeTicketFor(c.participant_id, c.species_id, c.id), p = pById[c.participant_id];
+      return `<div class="border-t border-amber-200 py-2">
+        <div>${esc(p?.display_name || '?')} – ${esc(sById[c.species_id]?.name || '')}: <b>${ticketLabel(c)} ${formatLbs(c.weight_lbs)}</b> (held)${other ? ` vs <b>${ticketLabel(other)} ${formatLbs(other.weight_lbs)}</b> (counts now)` : ''}</div>
+        ${edit ? `<div class="flex flex-wrap gap-2 mt-1">
+          <button type="button" onclick="countHeld('${c.id}')" class="bg-amber-600 text-white px-3 py-1 rounded">Count ${ticketLabel(c)}${other ? ` (void ${ticketLabel(other)})` : ''}</button>
+          ${other ? `<button type="button" onclick="dropHeld('${c.id}')" class="border border-amber-600 px-3 py-1 rounded">Keep ${ticketLabel(other)} (void ${ticketLabel(c)})</button>` : ''}
+        </div>` : ''}</div>`;
+    }).join('');
+}
+function countHeld(id) {
+  const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
+  const other = activeTicketFor(c.participant_id, c.species_id, c.id);
+  if (other) enqueue({ kind: 'update', table: 'catches', id: other.id, patch: { status: 'voided', void_reason: `Replaced by ${ticketLabel(c)}` } });
+  enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'active', void_reason: null } });
+  msg('weighMsg', `${ticketLabel(c)} now counts${other ? `; ${ticketLabel(other)} voided` : ''}.`);
+}
+function dropHeld(id) {
+  const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
+  const other = activeTicketFor(c.participant_id, c.species_id, c.id);
+  enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'voided', void_reason: `Duplicate species – kept ${other ? ticketLabel(other) : 'the other ticket'}` } });
+  msg('weighMsg', `${ticketLabel(c)} voided${other ? `; ${ticketLabel(other)} still counts` : ''}.`);
 }
 function openTicket(id) {
   const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
@@ -1210,12 +1302,15 @@ function openTicket(id) {
 }
 function refreshTicketHeader() {
   const c = S.catches.find(x => x.id === S.ticketId); if (!c) return closeTicket();
-  const v = c.status === 'voided';
+  const v = c.status !== 'active', held = c.status === 'held';
   $('tkTitle').textContent = `Ticket ${ticketLabel(c)}`;
   $('tkMeta').textContent = `Code ${ticketCode(c)} • weighed ${new Date(c.weighed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}${c.station ? ' at ' + c.station : ''}${c._pending ? ' • not synced yet' : ''}`;
   $('tkVoided').classList.toggle('hidden', !v);
-  $('tkVoided').textContent = v ? `Voided${c.void_reason ? ': ' + c.void_reason : ''}. It doesn't count on any leaderboard.` : '';
-  $('tkVoidBtn').classList.toggle('hidden', v); $('tkRestoreBtn').classList.toggle('hidden', !v);
+  $('tkVoided').textContent = held ? `Held${c.void_reason ? ': ' + c.void_reason : ''} It doesn't count until you choose it.`
+    : v ? `Voided${c.void_reason ? ': ' + c.void_reason : ''}. It doesn't count on any leaderboard.` : '';
+  $('tkVoided').className = `${v ? '' : 'hidden '}${held ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'} rounded p-2 text-sm mb-3`;
+  $('tkVoidBtn').classList.toggle('hidden', c.status === 'voided'); $('tkRestoreBtn').classList.toggle('hidden', !v);
+  $('tkRestoreBtn').textContent = held ? 'Count this ticket' : 'Restore ticket';
   if (v) showVoidConfirm(false);
 }
 function closeTicket() { S.ticketId = null; closeModal('ticketModal'); }
@@ -1231,6 +1326,8 @@ function saveTicket() {
   const patch = {};
   for (const [k, v] of Object.entries(want)) if (k === 'weight_lbs' ? round2(c[k]) !== v : (c[k] ?? null) !== v) patch[k] = v;
   if (!Object.keys(patch).length) return msg('tkMsg', 'Nothing changed.');
+  const clash = c.status === 'active' && (patch.participant_id || patch.species_id) && activeTicketFor(want.participant_id, want.species_id, c.id);
+  if (clash) return msg('tkMsg', `That angler already has a ${speciesName(want.species_id)} (${ticketLabel(clash)}). Only one fish per species – void ${ticketLabel(clash)} first.`, false);
   enqueue({ kind: 'update', table: 'catches', id: c.id, patch });
   msg('weighMsg', `Saved ticket ${ticketLabel(c)}${S.online ? '' : ' (will sync when back online)'}.`);
   closeTicket();
@@ -1243,9 +1340,12 @@ function voidTicket() {
 }
 function restoreTicket() {
   const c = S.catches.find(x => x.id === S.ticketId); if (!c) return;
-  if (!confirm(`Restore ticket ${ticketLabel(c)}? It will count on the leaderboards again.`)) return;
+  const other = activeTicketFor(c.participant_id, c.species_id, c.id);
+  if (!confirm(other ? `${ticketLabel(other)} (${formatLbs(other.weight_lbs)}) counts for this angler's ${speciesName(c.species_id)} now. Void ${ticketLabel(other)} and count ${ticketLabel(c)} instead?`
+    : `${c.status === 'held' ? 'Count' : 'Restore'} ticket ${ticketLabel(c)}? It will count on the leaderboards.`)) return;
+  if (other) enqueue({ kind: 'update', table: 'catches', id: other.id, patch: { status: 'voided', void_reason: `Replaced by ${ticketLabel(c)}` } });
   enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'active', void_reason: null } });
-  msg('weighMsg', `Restored ticket ${ticketLabel(c)}.`); closeTicket();
+  msg('weighMsg', `${ticketLabel(c)} counts again${other ? `; ${ticketLabel(other)} voided` : ''}.`); closeTicket();
 }
 function reprintTicket() {
   const c = S.catches.find(x => x.id === S.ticketId); const p = c && S.participants.find(x => x.id === c.participant_id);
@@ -1312,13 +1412,16 @@ function rowsHtml(rows, compact) {
     || `<div class="text-sm text-slate-500 ${compact ? 'px-2 py-1' : ''}">No fish yet</div>`;
 }
 // Collapsed group sections on grouped boards, remembered per tournament + board on this device.
-function collapsedGroups() { return LS.get('ift.collapsed', {}); }
+// Grouped sections start folded; the keys stored here are the ones a viewer opened. (New key in Nov 2026 when
+// the default changed from open to folded, so old "collapsed" choices don't carry over.)
+LS.del('ift.collapsed');
+function openGroups() { return LS.get('ift.groupsOpen', {}); }
 function groupKey(boardSlug, name) { return `${S.tid}|${boardSlug}|${name}`; }
 function toggleGroup(btn) {
-  const all = collapsedGroups(), key = btn.dataset.key;
+  const all = openGroups(), key = btn.dataset.key;
   if (all[key]) delete all[key]; else all[key] = 1;
-  LS.set('ift.collapsed', all);
-  const open = !all[key];
+  LS.set('ift.groupsOpen', all);
+  const open = !!all[key];
   btn.setAttribute('aria-expanded', open);
   btn.nextElementSibling.classList.toggle('hidden', !open);
   btn.querySelector('svg').classList.toggle('-rotate-90', !open);
@@ -1356,7 +1459,7 @@ function renderLeaderboard() {
   $('boardContent').innerHTML = `
     <div class="text-xs text-slate-500 mb-2">${b.scoring === 'biggest_fish' ? 'Biggest single fish' : 'Total weight'}</div>
     ${b.groups ? b.groups.map(g => {
-      const key = groupKey(slugs[idx], g.name), shut = !!collapsedGroups()[key];
+      const key = groupKey(slugs[idx], g.name), shut = !openGroups()[key];
       return `<section class="mb-3">
         <button type="button" data-key="${esc(key)}" onclick="toggleGroup(this)" aria-expanded="${!shut}"
           class="sticky top-0 w-full flex items-center justify-between gap-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-sm uppercase tracking-wide px-2 py-2 rounded text-left">

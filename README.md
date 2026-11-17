@@ -97,7 +97,14 @@ To remove someone completely, delete their user in Authentication → Users (the
 
 4. **Set the admin PIN** (see "Admin PIN" below) – without it nobody can switch into Admin mode.
 5. **Sign in on the site** with "Staff sign in", switch the mode picker to **Admin** (enter the PIN), go to **Setup**, create the tournament (name, year, Age/Division
-   names with their age ranges, species), and adjust the leaderboards. Four default boards are created automatically.
+   names with their age ranges, species), and adjust the leaderboards. New tournaments start with the organizer's setup:
+   Age/Divisions **12 & Under** (max 12) and **13-17** (13–17), and three boards:
+   - **Overall** – everybody, ranked by **total weight** (each angler's fish added up; with one fish per species
+     that's their best of each species). Change its **Metric** to **Biggest single fish** if the organizer
+     ranks Overall by the heaviest fish instead.
+   - **Species** – one board, a section per species (each angler's one fish of that species).
+   - **Age** – one board, a section per Age/Division (12 & Under, 13-17). Adults are only on Overall.
+
    Species and Age/Division boards have the same picker choices:
    - **Each species / Age/Division** – a separate tab (and TV slide) per species or group.
    - **All species / Age/Divisions, grouped on one board** – ONE tab (one TV slide, split into pages on the TV
@@ -105,7 +112,7 @@ To remove someone completely, delete their user in Authentication → Users (the
    - **Any species / Age/Division, combined ranking** – one tab, everyone ranked together.
    - Or pick a single species / group.
    - **Top**: how many places to show (3–100), or **All** to list everyone with a fish. On the public page and the
-     staff Leaderboard tab, grouped sections can be collapsed by tapping their heading (remembered on that device
+     staff Leaderboard tab, grouped sections **start folded** – tap a heading to open it (remembered on that device
      per board); the Big Screen always shows every section and pages through long lists (11 lines per page).
      "All" makes the public page download a bit more (one line per angler) – it only re-downloads when the data
      changes, so the extra is small even with a few hundred anglers.
@@ -151,9 +158,11 @@ It takes effect immediately on every laptop. Clear the cell (NULL) to block Admi
   everyone when the ranges change, so all laptops (and changes that sync later from offline laptops) agree.
 - **Set by hand:** in the participant's Edit window, pick a specific Age/Division instead of "automatic".
   It's shown with a "set by hand" tag and won't be changed by the ranges. Choose "automatic" to undo.
-- If the age is blank or no range matches, the Age/Division is left empty and the participant is flagged
-  in red on the Participants tab ("without Age/Division" link filters to them). They won't appear on
-  Age/Division leaderboards until fixed.
+- **Everybody is in Overall.** Anyone older than the oldest range (18+ with 12 & Under / 13-17) has no
+  Age/Division and shows as **"Overall only (adult)"** – that's normal, not an error.
+- A participant with **no age** (or an age no range covers, e.g. a gap between ranges) is flagged in red on the
+  Participants tab ("need an age" link filters to them). They're on Overall but not on the Age board until fixed.
+- An imported Age/Division name that isn't one of the tournament's (e.g. an old "Adult" or "14-18") is ignored.
 
 ## CSV formats
 
@@ -183,6 +192,15 @@ ticket (e.g. `CD0E7848`). Tap a ticket to change the angler, species, weight or 
 it (a reason is required; voided tickets are struck through, drop off every leaderboard, and can be **Restored**).
 Edits work offline like weigh-ins and sync later; leaderboards update on their own.
 
+- **One fish per species per angler.** When the angler already has a counting ticket for the species, the weigh
+  screen shows it (e.g. "Already has a Walleye: ticket #3 – 2.10 lbs") and won't record on Enter. Choose
+  **Replace #3 with this fish** (the server voids #3 with "Replaced by #N") or **Keep #3 – don't record**. It says
+  when the new fish is not bigger. Editing a ticket into a second fish of the same species, or restoring a voided one
+  while another counts, is refused (restore offers to void the other one instead).
+- **Offline duplicates are never lost.** If two laptops (one offline) weigh the same angler + species, the one that
+  syncs second is saved as **held** – it doesn't count. A yellow "needs a decision" box at the top of Find / edit
+  tickets lists it next to the one that counts, with **Count #N (void #M)** / **Keep #M (void #N)**.
+  The database enforces the rule too (only one counting ticket per tournament + angler + species).
 - Ticket numbers (#1, #2, …) are per tournament and assigned by the server when the weigh-in syncs (a ticket weighed
   offline shows `#…` until then; its printed code always works for searching).
 - Weigh staff can edit any ticket in the tournament; Gate can't. The database enforces this.
@@ -201,7 +219,8 @@ changes). Other staff laptops switch away automatically; public links for it sho
 ## Sample file
 
 `samples/test-anglers.csv` – 40 fake anglers mixing age only, birth date only (mixed formats), both
-(some disagreeing), neither, and bad dates, including the 13/14 and 18/19 boundaries for a 2027-01-23 event.
+(some disagreeing), neither, and bad dates, including the 12/13 and 17/18 boundaries for a 2027-01-23 event, plus
+adults (Overall only) and an old "Adult" division name (ignored).
 Import it into a separate **test tournament**, not a real one. Two rows have ids (2027_00101/00102) to show that ids in
 a file are ignored – every row gets the next automatic number.
 
