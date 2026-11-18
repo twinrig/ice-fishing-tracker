@@ -13,7 +13,7 @@ const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
 
 const ROLE_LABEL = { admin: 'Admin 🔒', gate: 'Gate / Registration', weigh: 'Weigh Station', screen: 'Big Screen' };
 const ROLE_TABS = {
-  admin: ['setup', 'participants', 'weighin', 'leaderboard', 'display'],
+  admin: ['setup', 'participants', 'weighin', 'leaderboard', 'display', 'issues'],
   gate: ['participants', 'leaderboard', 'display'],
   weigh: ['weighin', 'leaderboard', 'display'],
   screen: ['display', 'leaderboard'],
@@ -41,7 +41,7 @@ const SCREEN_MODE = params.get('screen') === '1';
 const BOARD_MODE = !SCREEN_MODE && !params.has('tab') && (params.get('view') === 'leaderboard'
   || (params.has('t') && !params.has('view')) || (!params.has('view') && /(^#|&)board=/.test(location.hash)));
 const KIOSK = SCREEN_MODE || BOARD_MODE; // read-only public pages: never load staff data or show staff controls
-const TAB_NAMES = ['setup', 'participants', 'weighin', 'leaderboard', 'display'];
+const TAB_NAMES = ['setup', 'participants', 'weighin', 'leaderboard', 'display', 'issues'];
 function urlParam(k) { return new URLSearchParams(location.search).get(k); }
 // The staff-app screen named in the URL (?tab=…; older full-app URLs used ?view=…).
 function linkedView() {
@@ -269,6 +269,7 @@ async function signOut() {
 }
 async function onSession(session) {
   S.session = session; S.user = session?.user || null;
+  S.issues = null;
   if (S.user && !KIOSK) {
     const { data, error } = await sb.from('staff_roles').select('role, display_name').eq('user_id', S.user.id);
     if (!error) { S.roles = data.map(r => r.role); LS.set('ift.roles.' + S.user.id, S.roles); }
@@ -282,6 +283,7 @@ async function renderAuth() {
   const signedIn = !!S.user;
   $('signInBtn').classList.toggle('hidden', signedIn || KIOSK);
   $('signOutBtn').classList.toggle('hidden', !signedIn);
+  $('issueBtn').classList.toggle('hidden', !(signedIn && S.roles.length && !KIOSK)); // staff only; never on public pages
   $('userBadge').textContent = signedIn ? S.user.email + (S.roles.length ? '' : ' (no staff role yet)') : '';
   const rs = $('roleSelect');
   const roles = S.roles.includes('admin') ? ['admin', 'gate', 'weigh', 'screen'] : S.roles;
@@ -302,7 +304,7 @@ async function renderAuth() {
 // current tab" made the mode picker look like it did nothing).
 function applyRole(role, silent, wantTab) {
   S.role = role || 'public';
-  if (S.role === 'admin') startAdminWatch(); else stopAdminWatch();
+  if (S.role === 'admin') { startAdminWatch(); loadIssues(true); } else { stopAdminWatch(); $('issuesBadge')?.classList.add('hidden'); }
   if ($('roleSelect').value !== S.role && [...$('roleSelect').options].some(o => o.value === S.role)) $('roleSelect').value = S.role;
   if (!silent && role !== 'public') LS.set('ift.stationRole', role);
   const allowed = ROLE_TABS[S.role] || ROLE_TABS.public;
@@ -532,6 +534,7 @@ function showTab(name) {
   if (name === 'participants') $('checkNum').focus();
   if (name === 'weighin') $('scanNum').focus();
   if (name === 'display') startDisplay();
+  if (name === 'issues') loadIssues();
 }
 function refreshViews() {
   const y = S.t?.year || '';
@@ -1496,6 +1499,120 @@ function renderDisplay() {
   $('displayUpdated').textContent = S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() : '';
   if (S.tab === 'display' && !TV.raf) TV.raf = requestAnimationFrame(tvTick);
 }
+
+// ---------------------------------------------------------------- report an issue (staff) / issues (admin)
+// Stored in public.issues. Any staff account can report and see its own reports; admins (Admin mode) see and
+// triage all of them. Context (screen, mode, tournament, browser, app version) is attached automatically.
+const ISSUE_STATUS = { open: 'Open', in_progress: 'In progress', done: 'Done', wont_fix: "Won't fix" };
+const ISSUE_TYPE = { bug: 'Bug', feature: 'Feature', question: 'Question' };
+const ISSUE_PRI = { low: 'Low', normal: 'Normal', high: 'High' };
+function toast(text, ok = true) {
+  const el = $('toast'); el.textContent = text;
+  el.className = `fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] ${ok ? 'bg-green-700' : 'bg-red-700'} text-white px-4 py-3 rounded-lg shadow-lg text-sm max-w-[90vw]`;
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.add('hidden'), 5000);
+}
+function issueContext() {
+  return {
+    view: S.tab, mode: S.role, tournament_id: S.tid, tournament_name: S.t?.name || S.tournaments.find(t => t.id === S.tid)?.name || null,
+    url: location.pathname + location.search, app_version: CFG.appVersion || null,
+    user_agent: navigator.userAgent.slice(0, 400), screen: `${window.innerWidth}x${window.innerHeight}`,
+    online: S.online, waiting_to_sync: Q.length, failed_to_sync: FAILED.length,
+    local_time: new Date().toString().slice(0, 60)
+  };
+}
+function openIssueModal() {
+  if (!S.user || !S.roles.length) return;
+  $('issT').value = ''; $('issDesc').value = ''; $('issType').value = 'bug'; $('issPri').value = 'normal'; $('issMsg').textContent = '';
+  $('issName').value = LS.get('ift.reporterName', '') || S.user.email || '';
+  $('issCtx').textContent = Object.entries(issueContext()).map(([k, v]) => `${k}: ${v ?? ''}`).join('\n');
+  $('issGo').disabled = false;
+  openModal('issueModal'); setTimeout(() => $('issT').focus(), 0);
+  loadMyIssues();
+}
+function closeIssueModal() { closeModal('issueModal'); }
+async function submitIssue() {
+  const title = $('issT').value.trim(), description = $('issDesc').value.trim(), name = $('issName').value.trim();
+  if (title.length < 3) { $('issMsg').textContent = 'Please enter a short title (at least 3 characters).'; return $('issT').focus(); }
+  if (!S.online) { $('issMsg').textContent = "You're offline – reports need an internet connection. Try again when you're back online."; return; }
+  $('issGo').disabled = true; $('issMsg').textContent = '';
+  const row = { title, description, type: $('issType').value, priority: $('issPri').value, reporter_name: name || null,
+    reporter_email: S.user.email || null, reported_by: S.user.id, context: issueContext() };
+  const { error } = await sb.from('issues').insert(row);
+  $('issGo').disabled = false;
+  if (error) { $('issMsg').textContent = isNetErr(error) ? "Couldn't reach the server – try again in a moment." : error.message; return; }
+  if (name) LS.set('ift.reporterName', name);
+  closeIssueModal();
+  toast('Thanks – your report was sent. You can check its status under "Report an issue" → Your reports.');
+  if (S.tab === 'issues') loadIssues();
+}
+async function loadMyIssues() {
+  const el = $('issMine'); el.innerHTML = '<div class="text-slate-500">Loading…</div>';
+  const { data, error } = await sb.from('issues').select('id, created_at, title, type, status, admin_notes')
+    .eq('reported_by', S.user.id).order('created_at', { ascending: false }).limit(20);
+  if (error) { el.innerHTML = `<div class="text-slate-500">${S.online ? "Couldn't load your reports." : 'Available when online.'}</div>`; return; }
+  el.innerHTML = (data || []).map(i => `<div class="border rounded p-2">
+      <div class="flex justify-between gap-2"><span class="font-medium truncate">${esc(i.title)}</span>${issueStatusChip(i.status)}</div>
+      <div class="text-xs text-slate-500">${ISSUE_TYPE[i.type] || esc(i.type)} • ${new Date(i.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</div>
+      ${i.admin_notes ? `<div class="text-xs text-slate-700 mt-1 whitespace-pre-wrap"><b>Admin notes:</b> ${esc(i.admin_notes)}</div>` : ''}
+    </div>`).join('') || '<div class="text-slate-500">No reports yet.</div>';
+}
+function issueStatusChip(st) {
+  const cls = { open: 'bg-amber-100 text-amber-800', in_progress: 'bg-blue-100 text-blue-800', done: 'bg-green-100 text-green-800', wont_fix: 'bg-slate-200 text-slate-700' }[st] || 'bg-slate-100';
+  return `<span class="text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${cls}">${ISSUE_STATUS[st] || esc(st)}</span>`;
+}
+async function loadIssues(countOnly) {
+  if (!hasRole('admin') || !S.online) { if (!countOnly) renderIssues(); return; }
+  const { data, error } = await sb.from('issues').select('*').order('created_at', { ascending: false }).limit(1000);
+  if (error) { if (!countOnly) $('issList').innerHTML = `<p class="text-red-600">Couldn't load issues: ${esc(error.message)}</p>`; return; }
+  S.issues = data || [];
+  updateIssuesBadge();
+  if (S.tab === 'issues') renderIssues();
+}
+function updateIssuesBadge() {
+  const n = (S.issues || []).filter(i => i.status === 'open').length, b = $('issuesBadge');
+  b.textContent = n; b.classList.toggle('hidden', !n || S.role !== 'admin');
+}
+function renderIssues() {
+  const el = $('issList'); if (!el) return;
+  if (!hasRole('admin')) { el.innerHTML = '<p class="text-slate-500">Switch to Admin mode to see all issues.</p>'; $('issCounts').textContent = ''; return; }
+  if (!S.issues) { el.innerHTML = `<p class="text-slate-500">${S.online ? 'Loading…' : 'Issues are available when online.'}</p>`; return; }
+  const all = S.issues, f = $('issFilter').value;
+  const c = st => all.filter(i => i.status === st).length;
+  $('issCounts').innerHTML = `<b>${c('open')} open</b> • ${c('in_progress')} in progress • ${c('done')} done • ${c('wont_fix')} won't fix • ${all.length} total`;
+  const list = all.filter(i => f === 'all' || (f === 'active' ? ['open', 'in_progress'].includes(i.status) : i.status === f));
+  const sel = (cls, map, cur) => `<select class="${cls} border rounded px-2 py-1">${Object.entries(map).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+  el.innerHTML = list.map(i => {
+    const ctx = i.context || {};
+    const ctxText = Object.entries(ctx).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v ?? ''}`).join('\n');
+    return `<div class="border rounded-lg p-3 ${i.priority === 'high' && i.status === 'open' ? 'border-red-300' : ''}" data-issue="${i.id}">
+      <div class="flex flex-wrap justify-between gap-2">
+        <div class="font-semibold min-w-0 break-words">${esc(i.title)}</div>
+        <div class="flex gap-1 items-center">${issueStatusChip(i.status)}<span class="text-xs px-2 py-0.5 rounded-full ${i.priority === 'high' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-700'}">${ISSUE_PRI[i.priority] || esc(i.priority)}</span></div>
+      </div>
+      <div class="text-xs text-slate-500">${ISSUE_TYPE[i.type] || esc(i.type)} • ${esc(i.reporter_name || '')}${i.reporter_email && i.reporter_email !== i.reporter_name ? ' &lt;' + esc(i.reporter_email) + '&gt;' : ''} • ${new Date(i.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}${ctx.view ? ` • ${esc(ctx.view)} / ${esc(ctx.mode || '')}` : ''}${ctx.tournament_name ? ' • ' + esc(ctx.tournament_name) : ''}</div>
+      ${i.description ? `<div class="text-sm mt-2 whitespace-pre-wrap break-words">${esc(i.description)}</div>` : ''}
+      ${ctxText ? `<details class="text-xs text-slate-500 mt-1"><summary class="cursor-pointer">Details</summary><pre class="whitespace-pre-wrap bg-slate-50 rounded p-2 mt-1">${esc(ctxText)}</pre></details>` : ''}
+      <div class="flex flex-wrap gap-2 items-end mt-2 text-sm">
+        <label class="text-xs text-slate-600">Status<br>${sel('is-status', ISSUE_STATUS, i.status)}</label>
+        <label class="text-xs text-slate-600">Priority<br>${sel('is-pri', ISSUE_PRI, i.priority)}</label>
+        <label class="text-xs text-slate-600 flex-1 min-w-[12rem]">Admin notes (the reporter can see these)
+          <textarea class="is-notes w-full border rounded px-2 py-1 text-sm" rows="2" maxlength="4000">${esc(i.admin_notes || '')}</textarea></label>
+        <button onclick="saveIssue('${i.id}')" class="bg-blue-600 text-white px-3 py-1.5 rounded">Save</button>
+      </div>
+      ${i.updated_at && i.updated_at !== i.created_at && new Date(i.updated_at) - new Date(i.created_at) > 2000 ? `<div class="text-xs text-slate-400 mt-1">Updated ${new Date(i.updated_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</div>` : ''}
+    </div>`;
+  }).join('') || '<p class="text-slate-500">No issues here.</p>';
+}
+async function saveIssue(id) {
+  if (!hasRole('admin')) return;
+  const box = document.querySelector(`[data-issue="${id}"]`);
+  const patch = { status: box.querySelector('.is-status').value, priority: box.querySelector('.is-pri').value, admin_notes: box.querySelector('.is-notes').value.trim() || null };
+  const { data, error } = await sb.from('issues').update(patch).eq('id', id).select().maybeSingle();
+  if (error || !data) return toast(error ? error.message : 'Not saved – Admin mode may have locked. Enter the PIN again.', false);
+  const i = S.issues.findIndex(x => x.id === id); if (i >= 0) S.issues[i] = data;
+  updateIssuesBadge(); renderIssues(); toast('Issue saved.');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('issueModal').classList.contains('hidden')) closeIssueModal(); });
 
 // ---------------------------------------------------------------- startup
 document.addEventListener('DOMContentLoaded', async () => {

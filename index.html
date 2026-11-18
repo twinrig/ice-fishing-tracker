@@ -56,6 +56,7 @@
       <span id="userBadge" class="text-slate-600"></span>
       <span id="roleMsg" class="text-amber-700 text-xs"></span>
       <button id="signInBtn" onclick="openSignIn()" class="bg-blue-600 text-white px-3 py-1 rounded">Staff sign in</button>
+      <button id="issueBtn" onclick="openIssueModal()" class="hidden border border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-1 rounded" title="Report a bug, ask a question or suggest a feature">⚑ Report an issue</button>
       <button id="signOutBtn" onclick="signOut()" class="border px-3 py-1 rounded hidden">Sign out</button>
     </div>
   </header>
@@ -76,6 +77,7 @@
     <button data-tab="weighin" onclick="showTab('weighin')" class="tab-btn px-3 py-2 hidden">Weigh-in</button>
     <button data-tab="leaderboard" onclick="showTab('leaderboard')" class="tab-btn px-3 py-2">Leaderboard</button>
     <button data-tab="display" onclick="showTab('display')" class="tab-btn px-3 py-2">Big Screen</button>
+    <button data-tab="issues" onclick="showTab('issues')" class="tab-btn px-3 py-2 hidden">Issues <span id="issuesBadge" class="hidden ml-1 text-xs bg-amber-500 text-white rounded-full px-1.5"></span></button>
   </nav>
 
   <!-- SETUP (admin) -->
@@ -261,6 +263,25 @@
     </div>
   </section>
 
+  <!-- ISSUES (admin) -->
+  <section id="tab-issues" class="tab hidden">
+    <div class="bg-white rounded-xl shadow p-4 md:p-6">
+      <div class="flex flex-wrap gap-2 justify-between items-center mb-1">
+        <h2 class="text-xl font-semibold">Issues</h2>
+        <div class="flex flex-wrap gap-2 items-center text-sm">
+          <label>Show <select id="issFilter" onchange="renderIssues()" class="border rounded px-2 py-1">
+            <option value="active">Open + In progress</option><option value="open">Open</option><option value="in_progress">In progress</option>
+            <option value="done">Done</option><option value="wont_fix">Won't fix</option><option value="all">All</option></select></label>
+          <button onclick="loadIssues()" class="border px-3 py-1 rounded">Refresh</button>
+          <button onclick="openIssueModal()" class="border px-3 py-1 rounded">+ Report an issue</button>
+        </div>
+      </div>
+      <div id="issCounts" class="text-sm text-slate-600 mb-3"></div>
+      <div id="issList" class="space-y-3"></div>
+      <p class="text-xs text-slate-500 mt-4">Issues are also in the Supabase Table Editor (table <code>issues</code>).</p>
+    </div>
+  </section>
+
   <!-- BIG SCREEN: top 10 Overall, top 5 per youth division, top 3 per species; scrolls (speed/pause set in Setup) -->
   <section id="tab-display" class="tab hidden">
     <div class="bg-black text-white rounded-xl p-4 md:p-8 h-[80vh] flex flex-col">
@@ -321,6 +342,41 @@
     <div id="siMsg" class="mt-2 text-sm text-red-600"></div>
   </form>
 </div>
+
+<!-- Report an issue -->
+<div id="issueModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this)closeIssueModal()">
+  <form class="bg-white rounded-xl p-6 w-full max-w-lg max-h-[95vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="issTitle" onsubmit="submitIssue(); return false;" novalidate>
+    <div class="flex justify-between items-start gap-2 mb-2">
+      <h3 id="issTitle" class="text-lg font-semibold">Report an issue</h3>
+      <button type="button" onclick="closeIssueModal()" class="text-slate-500 text-2xl leading-none px-2" aria-label="Close">&times;</button>
+    </div>
+    <label class="block text-sm font-medium">Title <span class="text-red-600">*</span>
+      <input id="issT" maxlength="120" placeholder="Short summary, e.g. Weigh ticket printed the wrong name" class="mt-1 w-full border rounded px-3 py-2 text-base font-normal"></label>
+    <div class="grid grid-cols-2 gap-3 mt-3">
+      <label class="block text-sm font-medium">Type
+        <select id="issType" class="mt-1 w-full border rounded px-3 py-2 text-base font-normal">
+          <option value="bug">Bug / problem</option><option value="feature">Feature idea</option><option value="question">Question</option></select></label>
+      <label class="block text-sm font-medium">Priority
+        <select id="issPri" class="mt-1 w-full border rounded px-3 py-2 text-base font-normal">
+          <option value="low">Low</option><option value="normal" selected>Normal</option><option value="high">High</option></select></label>
+    </div>
+    <label class="block text-sm font-medium mt-3">Description
+      <textarea id="issDesc" rows="5" maxlength="4000" placeholder="What happened? What did you expect? Steps to repeat it." class="mt-1 w-full border rounded px-3 py-2 text-base font-normal"></textarea></label>
+    <label class="block text-sm font-medium mt-3">Your name
+      <input id="issName" maxlength="120" class="mt-1 w-full border rounded px-3 py-2 text-base font-normal"></label>
+    <details class="text-xs text-slate-500 mt-2"><summary class="cursor-pointer">Attached automatically</summary><pre id="issCtx" class="whitespace-pre-wrap mt-1 bg-slate-50 rounded p-2"></pre></details>
+    <div id="issMsg" class="text-sm text-red-600 mt-2"></div>
+    <div class="flex gap-2 mt-3">
+      <button id="issGo" type="submit" class="flex-1 bg-blue-600 text-white py-2 rounded font-semibold disabled:opacity-50">Send report</button>
+      <button type="button" onclick="closeIssueModal()" class="px-4 py-2 border rounded">Cancel</button>
+    </div>
+    <div class="mt-4 border-t pt-3">
+      <h4 class="text-sm font-semibold mb-1">Your reports</h4>
+      <div id="issMine" class="text-sm space-y-1"></div>
+    </div>
+  </form>
+</div>
+<div id="toast" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] bg-green-700 text-white px-4 py-3 rounded-lg shadow-lg text-sm max-w-[90vw]" role="status" aria-live="polite"></div>
 
 <!-- Walk-up Modal -->
 <div id="modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -426,7 +482,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261118a"></script>
-<script src="app.js?v=20261118a"></script>
+<script src="config.js?v=20261118b"></script>
+<script src="app.js?v=20261118b"></script>
 </body>
 </html>

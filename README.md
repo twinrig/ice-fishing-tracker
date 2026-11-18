@@ -225,6 +225,32 @@ Edits work offline like weigh-ins and sync later; leaderboards update on their o
 - Every edit, void and restore is logged with who (email) and when, showing old → new values (the ticket's
   "Change history"). The weigh-in CSV export includes ticket number, code, note and last-changed time.
 
+## Reporting issues (instead of GitHub Issues)
+
+Anyone signed in with a staff account (any role: admin, gate, weigh or screen) sees **⚑ Report an issue** at the top
+of the staff app. It opens a form with **Title**, **Type** (Bug / Feature idea / Question), **Priority**
+(Low / Normal / High), **Description** and **Your name** (pre-filled with the account email; remembered on that
+device). These are attached automatically (shown under "Attached automatically"): the current screen and mode,
+the tournament, the page address, the app version (`appVersion` in `config.js`), the browser, the window size,
+online/offline and how many changes are waiting to sync. The same form lists **Your reports** with their status and
+any admin notes, so the reporter can follow up. Reports need an internet connection.
+
+- **Admins** (in Admin mode, after the PIN) get an **Issues** tab: newest first, filter by status (default
+  Open + In progress), counts of open / in progress / done / won't fix, and an open-count badge on the tab. Change
+  **Status** (Open, In progress, Done, Won't fix), **Priority** and **Admin notes** (visible to the reporter) and
+  click Save.
+- **Who can see what** (enforced in the database): staff can add reports and see only their own; admins in Admin mode
+  see and edit all; signed-in accounts without a staff role and the public site can't read or post anything.
+  The reporter, email and attached details can't be changed from the app. Limit: 10 reports per hour and 30 per day
+  per account (spam guard).
+- **Supabase dashboard:** the `issues` table can also be viewed, sorted, filtered and edited directly in the Table
+  Editor: https://supabase.com/dashboard/project/cqnqqjaoeqsdakrdijzr/editor (pick `issues`). Anyone with dashboard
+  access (e.g. Jim) can triage there without signing in to the app; rows can also be added there.
+- **Giving someone (e.g. a collaborator) the button:** create their login in Supabase → Authentication → Users →
+  Add user (email + password; they can change it later), then add a row in `staff_roles` with their `user_id` and a
+  role. `screen` is the safest (read-only staff view + reporting); use `admin` only if they should also triage in the
+  app (they'll need the admin PIN for the Issues tab).
+
 ## Deleting a tournament
 
 Setup → **Danger zone – Delete tournament** (admins only, bottom of the page). The pop-up shows what will be deleted
