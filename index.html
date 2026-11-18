@@ -4,16 +4,49 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ice Fishing Tournament Tracker</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.17"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.min.js"></script>
+<style>
+  /* ===== Brand colors (from the Catfish Bay / Ice Fish Fest logos). Tweak these to re-theme the whole site. =====
+     ESTIMATED from the description – replace with values sampled from the logo files. */
+  :root {
+    --brand-blue: #1a4fa3;      /* "Catfish Bay" / "ICE FISH FEST" lettering – primary (buttons, tabs, headings) */
+    --brand-blue-dark: #12397a; /* hover / pressed */
+    --brand-blue-deep: #0c2654; /* headings on light, darkest text accents */
+    --brand-red: #c8102e;       /* "WATER SKI PARK" / banner red – accent (rank #1, highlights, alerts, danger) */
+    --brand-red-dark: #a00c24;
+    --brand-ice: #8fd3f0;       /* wave cyan / ice blue – accents on dark backgrounds */
+    --brand-ice-light: #e8f5fc; /* page background */
+    --brand-ice-50: #f3f9fd;
+    --tv-bg: #0b1f44;           /* big screen: dark navy derived from the brand blue */
+    --tv-bg-2: #102c5c;
+    --tv-line: #24467d;
+  }
+</style>
 <style type="text/tailwindcss">
+  /* Map Tailwind's blue / red / sky scales to the brand colors so existing classes pick them up. */
+  @theme {
+    --color-blue-50: #eef4fb; --color-blue-100: #dbe7f6; --color-blue-200: #b9cfee; --color-blue-300: #8eb0e0;
+    --color-blue-400: #5a88cc; --color-blue-500: #2d62b6; --color-blue-600: var(--brand-blue); --color-blue-700: var(--brand-blue-dark);
+    --color-blue-800: #0f2f66; --color-blue-900: var(--brand-blue-deep);
+    --color-red-50: #fdedf0; --color-red-100: #f9d3da; --color-red-200: #f2a7b4; --color-red-300: #e97a8d;
+    --color-red-400: #dc4560; --color-red-500: #d01f3d; --color-red-600: var(--brand-red); --color-red-700: var(--brand-red-dark);
+    --color-red-800: #7e0a1d;
+    --color-sky-200: #c5e9f8; --color-sky-300: var(--brand-ice); --color-sky-700: #2b6fa3; --color-sky-800: #1e4f7a;
+  }
   @layer base { *, ::after, ::before, ::backdrop { border-color: var(--color-slate-200, #e2e8f0); } button:not(:disabled) { cursor: pointer; } }
 </style>
 <style>
-  body { font-family: system-ui, sans-serif; }
+  body { font-family: system-ui, sans-serif; background: var(--brand-ice-light); }
+  .tv-screen { background: linear-gradient(180deg, var(--tv-bg-2), var(--tv-bg)); }
+  .rank-1 { background: var(--brand-red); color: #fff; border-radius: 9999px; padding: 0 .45em; }
+  #displayBoard .rank-1 { padding: 0 .35em; }
+  #mainNav { border-bottom: 2px solid var(--brand-blue); }
   .print-card, .print-ticket {
     width: 2.4in; /* ~62mm for Brother QL-800 */
     background: white; border: 1px solid #ccc; padding: 8px; font-size: 11px; text-align: center;
@@ -35,7 +68,8 @@
   body.screen-mode header, body.screen-mode #mainNav, body.screen-mode #connBar { display: none !important; }
   body.screen-mode .app-wrap { max-width: none; padding: 0; }
   body.screen-mode #tab-display > div { border-radius: 0; height: 100vh; min-height: 0; }
-  body.screen-mode #headerBanner { display: none !important; }
+  body.screen-mode #headerBanner, body.screen-mode #siteFooter { display: none !important; }
+  #headerImg, #displayBanner { image-rendering: auto; }
   #displayViewport { position: relative; overflow: hidden; }
   #displayBoard { will-change: transform; transition: opacity .4s; }
   #displayBoard.tv-fade { opacity: 0; }
@@ -44,10 +78,10 @@
   @media (min-width: 768px) { body.board-mode .app-wrap { padding: 1rem; } }
 </style>
 </head>
-<body class="bg-slate-100 text-slate-900">
+<body class="text-slate-900">
 <div class="app-wrap max-w-6xl mx-auto p-4">
   <!-- Header graphic: assets/header.png (or the tournament's header image URL); hidden, with the text title shown, if missing -->
-  <div id="headerBanner" class="hidden mb-3"><img id="headerImg" alt="Ice Fishing Tracker" class="block w-full h-auto max-h-48 object-contain rounded"></div>
+  <div id="headerBanner" class="hidden mb-3"><img id="headerImg" alt="Ice Fishing Tracker" class="block w-full h-auto max-h-40 object-contain rounded"></div>
   <header class="mb-3 flex flex-wrap gap-3 justify-between items-center">
     <h1 id="headerText" class="text-2xl font-bold text-blue-900">Ice Fishing Tracker</h1>
     <div class="flex flex-wrap items-center gap-2 text-sm">
@@ -284,16 +318,20 @@
 
   <!-- BIG SCREEN: top 10 Overall, top 5 per youth division, top 3 per species; scrolls (speed/pause set in Setup) -->
   <section id="tab-display" class="tab hidden">
-    <div class="bg-black text-white rounded-xl p-4 md:p-8 h-[80vh] flex flex-col">
+    <div class="tv-screen text-white rounded-xl p-4 md:p-8 h-[80vh] flex flex-col">
       <img id="displayBanner" alt="" class="hidden w-full h-auto max-h-[18vh] object-contain mb-2 shrink-0">
-      <div class="text-center text-sm text-slate-400 shrink-0" id="displayTournament"></div>
+      <div class="text-center text-sm text-sky-200 shrink-0" id="displayTournament"></div>
       <div class="text-center text-4xl font-bold mb-4 shrink-0" id="displayTitle">LIVE LEADERBOARD</div>
       <div id="displayViewport" class="flex-1 min-h-0">
         <div id="displayBoard" class="text-3xl max-w-6xl mx-auto"></div>
       </div>
-      <div class="text-center text-xs text-slate-500 mt-2 shrink-0" id="displayUpdated"></div>
+      <div class="text-center text-xs text-sky-200/70 mt-2 shrink-0" id="displayUpdated"></div>
     </div>
   </section>
+  <footer id="siteFooter" class="mt-8 mb-2 flex items-center justify-center gap-3 text-xs text-slate-500">
+    <img src="assets/logo-catfish-bay.jpg" alt="Catfish Bay Water Ski Park" class="h-10 w-auto rounded" onerror="this.remove()">
+    <span>Ice Fish Fest tournament tracker</span>
+  </footer>
 </div>
 
 <div id="printArea"></div>
@@ -482,7 +520,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261118b"></script>
-<script src="app.js?v=20261118b"></script>
+<script src="config.js?v=20261118c"></script>
+<script src="app.js?v=20261118c"></script>
 </body>
 </html>

@@ -126,7 +126,7 @@ To remove someone completely, delete their user in Authentication → Users (the
 ## Header graphic
 
 The text title "Ice Fishing Tracker" is replaced by a header graphic when one is available:
-- Put the image in the repo as **`assets/header.png`** (used by every tournament), or
+- Put the image in the repo as **`assets/header.jpg`** (or `assets/header.png`; used by every tournament), or
 - set **Header image URL** in Setup → Big screen & header for one tournament (`https://…` or `assets/…`).
 If neither loads, the text title is shown. Suggested size: **2400 × 300 px** (8:1, wide banner), PNG or JPG,
 under ~500 KB, with the important content away from the left/right edges. It's shown full-width at the top of the
@@ -224,6 +224,14 @@ Edits work offline like weigh-ins and sync later; leaderboards update on their o
 - Weigh staff can edit any ticket in the tournament; Gate can't. The database enforces this.
 - Every edit, void and restore is logged with who (email) and when, showing old → new values (the ticket's
   "Change history"). The weigh-in CSV export includes ticket number, code, note and last-changed time.
+
+## Colors / theme
+
+Site colors come from the logos and are CSS variables at the top of `index.html` (`--brand-blue` primary,
+`--brand-red` accent, `--brand-ice` / `--brand-ice-light` ice blue, `--tv-bg` / `--tv-bg-2` dark navy big screen).
+Tailwind's blue / red / sky color scales are mapped to them, so changing a variable re-themes buttons, tabs, headings
+and the big screen. Rank #1 gets a red badge. Icons: `assets/favicon-32.png`, `assets/icon-192.png`,
+`assets/apple-touch-icon.png` (180×180); footer logo: `assets/logo-catfish-bay.jpg` (hidden if missing).
 
 ## Reporting issues (instead of GitHub Issues)
 

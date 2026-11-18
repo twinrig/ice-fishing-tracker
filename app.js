@@ -727,23 +727,21 @@ async function saveScreenSettings() {
   msg('screenMsg', 'Saved – the big screen picks this up within about 15 seconds.');
 }
 
-// ---- Header graphic: the tournament's header_image_url, else assets/header.png, else the text title.
-const HEADER_DEFAULT = 'assets/header.png';
+// ---- Header graphic: the tournament's header_image_url, else assets/header.jpg / header.png, else the text title.
+const HEADER_DEFAULTS = ['assets/header.jpg', 'assets/header.png'];
 function updateHeaderImage() {
-  const url = S.t?.header_image_url || S.board.data?.tournament?.header_image_url || HEADER_DEFAULT;
-  const img = $('headerImg'); if (!img || img.dataset.req === url) return;
-  img.dataset.req = url; img.dataset.want = url;
+  const custom = S.t?.header_image_url || S.board.data?.tournament?.header_image_url || null;
+  const list = [...new Set([custom, ...HEADER_DEFAULTS].filter(Boolean))], key = list.join('|');
+  const img = $('headerImg'); if (!img || img.dataset.req === key) return;
+  img.dataset.req = key;
   const show = ok => {
     $('headerBanner').classList.toggle('hidden', !ok); $('headerText').classList.toggle('hidden', ok);
     const tv = $('displayBanner'); if (tv) { tv.classList.toggle('hidden', !ok); if (ok) tv.src = img.src; }
   };
-  img.onload = () => { if (img.dataset.want === url) show(true); };
-  img.onerror = () => {
-    if (img.dataset.want !== url) return;
-    if (url !== HEADER_DEFAULT) { img.dataset.want = HEADER_DEFAULT; img.src = HEADER_DEFAULT; return; }
-    show(false);
-  };
-  img.src = url;
+  let n = 0;
+  img.onload = () => { if (img.dataset.req === key) show(true); };
+  img.onerror = () => { if (img.dataset.req !== key) return; if (++n < list.length) img.src = list[n]; else show(false); };
+  img.src = list[0];
 }
 
 // ---- Delete tournament (admin): typed-name confirmation, done server-side in one transaction.
@@ -1342,7 +1340,7 @@ function boardSections(b) { return b.groups ? b.groups : [{ name: null, rows: b.
 function boardHasData(b) { return boardSections(b).some(s => s.rows.length); }
 // Each row: rank, name, then the counted fish's species and weight (e.g. "Walleye 4.00 lbs").
 function rowsHtml(rows, compact) {
-  return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)}</span><span class="whitespace-nowrap"><span class="text-slate-600">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
+  return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold ${r.rank === 1 ? 'rank-1' : 'text-blue-900'}">${r.rank}.</span> ${esc(r.name)}</span><span class="whitespace-nowrap"><span class="text-slate-600">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
     || `<div class="text-sm text-slate-500 ${compact ? 'px-2 py-1' : ''}">No fish yet</div>`;
 }
 // Collapsed group sections on grouped boards, remembered per tournament + board on this device.
@@ -1472,10 +1470,10 @@ function tvTick(now) {
   inner.style.transform = `translateY(${-Math.round(TV.y)}px)`;
 }
 function tvRows(rows, n, big) {
-  return rows.slice(0, n).map(r => `<div class="flex justify-between gap-4 border-b border-slate-700 ${big ? 'py-2' : 'py-1 text-2xl'}">
-      <span class="min-w-0 truncate">${r.rank}. ${esc(r.name)}</span>
-      <span class="whitespace-nowrap"><span class="text-slate-300">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
-    || `<p class="text-slate-500 text-xl py-1">No fish yet</p>`;
+  return rows.slice(0, n).map(r => `<div class="flex justify-between gap-4 border-b border-[color:var(--tv-line)] ${big ? 'py-2' : 'py-1 text-2xl'}">
+      <span class="min-w-0 truncate"><span class="${r.rank === 1 ? 'rank-1' : ''}">${r.rank}.</span> ${esc(r.name)}</span>
+      <span class="whitespace-nowrap"><span class="text-sky-200">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
+    || `<p class="text-sky-200/60 text-xl py-1">No fish yet</p>`;
 }
 function tvHtml(data) {
   const boards = data?.boards || [], by = k => boards.find(b => b.key === k);
