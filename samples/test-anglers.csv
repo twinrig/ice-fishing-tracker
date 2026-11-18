@@ -1,41 +1,41 @@
-name,age,birth_date,Age/Division,email,phone,id
-Liam Richter,9,,,,605-555-3236,
-Olivia Halvorson,12,,,,605-555-7896,
-Noah Larson,13,,,noah.larson@example.com,605-555-6890,
-Emma Moe,11,,,emma.moe@example.com,605-555-3005,2027_00101
-Mason Johnson,16,,,mason.johnson@example.com,605-555-9286,
-Ava Swenson,17,,,,605-555-1218,
-Ethan Novak,18,,,ethan.novak@example.com,605-555-2002,
-Sophia Braun,34,,,sophia.braun@example.com,,
-Logan Schultz,47,,,logan.schultz@example.com,605-555-0562,
-Isabella Dahl,62,,,isabella.dahl@example.com,605-555-2225,
-Lucas Wagner,71,,,lucas.wagner@example.com,605-555-0564,
-Mia Klein,25,,,mia.klein@example.com,605-555-6189,
-Jackson Thompson,,2014-01-24,,jackson.thompson@example.com,605-555-8003,
-Harper Peterson,,1/23/2014,,harper.peterson@example.com,,
-Aiden Becker,,01/24/2009,,aiden.becker@example.com,605-555-7923,
-Evelyn Kowalski,,1/23/09,,evelyn.kowalski@example.com,,
-Carter Erickson,,2019-09-27,,,605-555-9735,
-Abigail Strand,,11/4/2016,,abigail.strand@example.com,605-555-3882,
-Owen Sorensen,,03/14/2014,,,605-555-7121,
-Ella Haugen,,4/5/11,,,605-555-2316,
-Wyatt Berg,,2009-06-01,,,605-555-5932,2027_00102
-Avery Bauer,,5/26/2004,,,605-555-8638,
-Henry Koch,,02/06/1988,,,605-555-4862,
-Scarlett Olson,,4/21/71,,scarlett.olson@example.com,605-555-3463,
-Jack Neumann,,1960-06-03,,jack.neumann@example.com,605-555-6478,
-Grace Lund,,6/3/1946,,,,
-Levi Schmidt,12,5/2/2014,,,605-555-4232,
-Chloe Miller,15,08/22/2011,,chloe.miller@example.com,605-555-2380,
-Hunter Wolf,30,1/30/96,,hunter.wolf@example.com,605-555-5183,
-Lily Jensen,44,1982-11-12,,,605-555-2142,
-Caleb Fischer,58,12/24/1968,,caleb.fischer@example.com,,
-Hannah Meyer,13,2014-06-01,,,,
-Brody Weber,18,2009-06-01,,brody.weber@example.com,605-555-3287,
-Addison Lindqvist,40,1985-04-08,,addison.lindqvist@example.com,605-555-5542,
-Gavin Brekke,,,Adult,,605-555-2298,
-Brooklyn Christensen,,,13-17,,605-555-9478,
-Tyler Anderson,,,,tyler.anderson@example.com,,
-Paige Nelson,,2/30/2012,,paige.nelson@example.com,605-555-4772,
-Cole Hoffman,16,13/45/2010,,cole.hoffman@example.com,605-555-4019,
-Megan Hanson,,sometime in 1990,,megan.hanson@example.com,605-555-3122,
+name,age,birth_date,email,phone,hole_tickets
+Liam Lien,17,,liam.lien@example.com,605-555-5541,1 hole
+Olivia Nelson,,3/9/2018,olivia.nelson@example.com,605-555-9840,2 holes
+Noah Berg,12,08/06/2014,noah.berg@example.com,605-555-5060,two
+Emma Lien,,,emma.lien@example.com,605-555-2289,1
+Ava Dahl,17,,ava.dahl@example.com,605-555-1863,2
+Mason Anderson,,12/16/2020,,605-555-5144,one
+Sophia Haugen,12,2014-11-21,sophia.haugen@example.com,605-555-4726,one
+Lucas Moe,12,,lucas.moe@example.com,605-555-5948,1
+Mia Bakke,8,,mia.bakke@example.com,605-555-3788,2
+Ethan Olson,,2015-10-02,ethan.olson@example.com,,1
+Harper Thorson,9,7/19/2017,harper.thorson@example.com,605-555-7812,2
+Logan Hanson,,,logan.hanson@example.com,605-555-8661,2 holes
+Ella Richter,12,,ella.richter@example.com,605-555-3571,
+Jack Peterson,,7/17/2013,jack.peterson@example.com,605-555-2007,two
+Grace Peterson,10,09/18/2016,grace.peterson@example.com,605-555-2498,2 holes
+Owen Johnson,6,,owen.johnson@example.com,605-555-7440,2 holes
+Lily Moe,11,,lily.moe@example.com,605-555-5167,2
+Wyatt Hanson,,09/10/2013,,605-555-9408,2
+Chloe Vik,6,2020-06-07,chloe.vik@example.com,605-555-8825,2
+Henry Richter,,,henry.richter@example.com,605-555-1942,2 holes
+Zoe Nelson,11,,zoe.nelson@example.com,605-555-2590,1
+Carter Strand,,2014-08-24,carter.strand@example.com,605-555-8546,1
+Nora Peterson,12,2/20/2014,nora.peterson@example.com,605-555-4116,
+Levi Swenson,10,,levi.swenson@example.com,605-555-6396,1
+Hazel Larson,12,,hazel.larson@example.com,605-555-1695,one
+Gavin Larson,,6/8/2018,gavin.larson@example.com,605-555-3248,2
+Ruby Haugen,13,03/08/2013,ruby.haugen@example.com,605-555-7037,1 hole
+Eli Richter,,,eli.richter@example.com,605-555-9043,one
+Ivy Hanson,14,,ivy.hanson@example.com,605-555-8658,two
+Cole Dahl,,12/07/2015,cole.dahl@example.com,605-555-9345,one
+Dale Johnson,61,1965-02-08,dale.johnson@example.com,605-555-3047,2
+Sharon Haugen,64,,sharon.haugen@example.com,605-555-2298,two
+Gary Dahl,45,,gary.dahl@example.com,605-555-6016,1
+Linda Olson,,1995-08-03,linda.olson@example.com,605-555-7134,two
+Rick Peterson,59,2/6/1967,rick.peterson@example.com,605-555-8274,1
+Deb Vik,,,deb.vik@example.com,605-555-9537,2
+Tom Haugen,28,,tom.haugen@example.com,605-555-4635,1 hole
+Karen Strand,,3/18/1989,karen.strand@example.com,605-555-9949,2
+Bill Anderson,46,12/17/1980,bill.anderson@example.com,605-555-4415,1
+Jean Nelson,35,,jean.nelson@example.com,605-555-1138,2 holes

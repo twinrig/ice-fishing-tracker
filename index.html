@@ -34,7 +34,11 @@
   #mainNav .tab-btn { flex: 0 0 auto; white-space: nowrap; }
   body.screen-mode header, body.screen-mode #mainNav, body.screen-mode #connBar { display: none !important; }
   body.screen-mode .app-wrap { max-width: none; padding: 0; }
-  body.screen-mode #tab-display > div { border-radius: 0; min-height: 100vh; }
+  body.screen-mode #tab-display > div { border-radius: 0; height: 100vh; min-height: 0; }
+  body.screen-mode #headerBanner { display: none !important; }
+  #displayViewport { position: relative; overflow: hidden; }
+  #displayBoard { will-change: transform; transition: opacity .4s; }
+  #displayBoard.tv-fade { opacity: 0; }
   body.board-mode header, body.board-mode #mainNav, body.board-mode #connBar { display: none !important; }
   body.board-mode .app-wrap { padding: 0.5rem; }
   @media (min-width: 768px) { body.board-mode .app-wrap { padding: 1rem; } }
@@ -42,8 +46,10 @@
 </head>
 <body class="bg-slate-100 text-slate-900">
 <div class="app-wrap max-w-6xl mx-auto p-4">
+  <!-- Header graphic: assets/header.png (or the tournament's header image URL); hidden, with the text title shown, if missing -->
+  <div id="headerBanner" class="hidden mb-3"><img id="headerImg" alt="Ice Fishing Tracker" class="block w-full h-auto max-h-48 object-contain rounded"></div>
   <header class="mb-3 flex flex-wrap gap-3 justify-between items-center">
-    <h1 class="text-2xl font-bold text-blue-900">Ice Fishing Tracker</h1>
+    <h1 id="headerText" class="text-2xl font-bold text-blue-900">Ice Fishing Tracker</h1>
     <div class="flex flex-wrap items-center gap-2 text-sm">
       <select id="tournamentSelect" onchange="selectTournament(this.value)" class="border rounded px-2 py-1 max-w-[16rem]"></select>
       <select id="roleSelect" onchange="requestRole(this.value)" class="border rounded px-2 py-1 hidden"></select>
@@ -95,10 +101,10 @@
         <label class="flex items-center gap-2 text-sm"><input id="tPublic" type="checkbox" checked> Show on the public leaderboard</label>
         <div class="md:col-span-2">
           <div class="flex justify-between items-center">
-            <label class="block text-sm font-medium">Age/Division (age ranges in whole years)</label>
-            <button type="button" onclick="addDivisionRow()" class="text-xs border px-2 py-1 rounded">+ Add Age/Division</button>
+            <label class="block text-sm font-medium">Youth divisions (age ranges in whole years)</label>
+            <button type="button" onclick="addDivisionRow()" class="text-xs border px-2 py-1 rounded">+ Add youth division</button>
           </div>
-          <p class="text-xs text-slate-500 mb-2">Participants are placed in the first Age/Division whose range contains their age. Leave Min or Max blank for open-ended (e.g. Max 13 = "13 & under", Min 19 = "19 and up"). Changing ranges re-assigns everyone not set by hand.</p>
+          <p class="text-xs text-slate-500 mb-2"><b>Overall is automatic – everyone is in it</b>, so don't add it here. Kids are placed in the first youth division whose range contains their age (from their age or birth date) and also appear in Overall. Leave Min blank for "and under" (e.g. Max 12 = "12 &amp; Under"). Changing ranges re-assigns everyone.</p>
           <div id="divisionRows" class="space-y-2"></div>
           <div id="divisionWarn" class="text-xs text-amber-700 mt-1"></div>
         </div>
@@ -109,18 +115,27 @@
     </div>
 
     <div class="bg-white rounded-xl shadow p-6">
-      <div class="flex justify-between items-center mb-2">
-        <h3 class="font-semibold">Leaderboards</h3>
-        <button onclick="addBoardConfig()" class="text-sm border px-3 py-1 rounded">+ Add board</button>
+      <h3 class="font-semibold mb-1">Big screen &amp; header</h3>
+      <p class="text-xs text-slate-500 mb-3">The big screen shows the top 10 Overall, top 5 in each youth division and top 3 in each species, and scrolls through them: it pauses at the top, scrolls down at the speed below, pauses at the bottom, then starts over. The leaderboard page shows everyone.</p>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm [&>*]:min-w-0">
+        <label class="block">Scroll speed (pixels / second)
+          <input id="scrSpeed" type="number" min="5" max="400" step="5" class="mt-1 w-full border rounded px-3 py-2"></label>
+        <label class="block">Pause at top &amp; bottom (seconds)
+          <input id="scrPause" type="number" min="0" max="120" step="1" class="mt-1 w-full border rounded px-3 py-2"></label>
+        <label class="block sm:col-span-3">Header image URL (optional – blank uses <code>assets/header.png</code> from the site, or the text title if there isn't one)
+          <input id="hdrUrl" placeholder="https://… or assets/header.png" class="mt-1 w-full border rounded px-3 py-2"></label>
       </div>
-      <p class="text-xs text-slate-500 mb-3">For Species and Age/Division boards: "Each" makes a separate tab per species or group; "All …, grouped on one board" makes one tab with a separately ranked section for each; "Any …, combined ranking" ranks everyone together on one tab. Order controls the big-screen rotation.</p>
-      <div id="configList" class="space-y-2 text-sm"></div>
-      <div id="configMsg" class="mt-2 text-sm"></div>
+      <p class="text-xs text-slate-500 mt-1">Slow ≈ 20, normal ≈ 40, fast ≈ 80.</p>
+      <div class="flex flex-wrap gap-2 items-center mt-3">
+        <button onclick="saveScreenSettings()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">Save big screen settings</button>
+        <a id="screenPreview" target="_blank" class="text-sm text-blue-700 underline hidden">Open the big screen</a>
+      </div>
+      <div id="screenMsg" class="mt-2 text-sm"></div>
     </div>
 
     <div class="bg-white rounded-xl shadow p-6">
       <h3 class="font-semibold mb-2">Import Participants (pre-registrations or walk-ups)</h3>
-      <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, optional <code>age</code> and/or a birth date (<code>birthdate</code>, <code>birth_date</code>, <code>dob</code>, <code>date_of_birth</code>, <code>birthday</code>; formats 2014-03-09, 3/9/2014, 03/09/2014, 3/9/14), <code>Age/Division</code>, <code>email</code>, <code>phone</code>, <code>id</code> (yyyy_#####). Ages are worked out as of the tournament's event date; a birth date wins over an age. With an age, the Age/Division is assigned automatically; without one, the file's Age/Division is used as a hand-set choice. Numbers are assigned automatically when <code>id</code> is blank. Re-importing the same file won't create duplicates.</p>
+      <p class="text-sm text-slate-600 mb-3">CSV columns: <code>name</code>, <code>email</code>, <code>phone</code> (both expected – rows missing them are flagged), <code>age</code> and/or a birth date (<code>birthdate</code>, <code>birth_date</code>, <code>dob</code>, <code>date_of_birth</code>, <code>birthday</code>; formats 2014-03-09, 3/9/2014, 03/09/2014, 3/9/14), optional <code>hole_tickets</code> (1 or 2, “one”/“two”). Ages are worked out as of the tournament's event date; if a row has both, the age column wins. Everyone is in Overall; kids are placed in their youth division automatically from their age. A division column, if present, is ignored. Participant numbers are always assigned automatically (an <code>id</code> column is ignored). Re-importing the same file won't create duplicates.</p>
       <div id="csvDrop" class="file-drop border-2 border-dashed border-blue-300 bg-blue-50 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
         <input type="file" id="csvFile" accept=".csv,text/csv" class="sr-only" onchange="csvChosen()">
         <label for="csvFile" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();$('csvFile').click()}"
@@ -143,7 +158,7 @@
         <div class="max-h-[60vh] overflow-auto border rounded">
           <table class="w-full text-xs"><thead class="bg-slate-100 sticky top-0"><tr>
             <th class="text-left p-1">#</th><th class="text-left p-1">Name</th><th class="text-left p-1">Age (file)</th><th class="text-left p-1">Birth date (file)</th>
-            <th class="text-left p-1">Age used</th><th class="text-left p-1">Age/Division</th><th class="text-left p-1">Notes</th></tr></thead>
+            <th class="text-left p-1">Age used</th><th class="text-left p-1">Youth division</th><th class="text-left p-1">Holes</th><th class="text-left p-1">Notes</th></tr></thead>
             <tbody id="importRows"></tbody></table>
         </div>
         <div class="flex gap-2 mt-2">
@@ -164,7 +179,7 @@
 
     <div id="dangerZone" class="bg-white rounded-xl shadow p-6 border-2 border-red-200 hidden">
       <h3 class="font-semibold text-red-700 mb-1">Danger zone – Delete tournament</h3>
-      <p class="text-sm text-slate-600 mb-3">Permanently deletes <b id="dzName"></b> and everything in it: participants, weigh-ins, species and leaderboards. This can't be undone – export the CSVs above first if you might need them.</p>
+      <p class="text-sm text-slate-600 mb-3">Permanently deletes <b id="dzName"></b> and everything in it: participants, weigh-ins, species and settings. This can't be undone – export the CSVs above first if you might need them.</p>
       <button onclick="openDeleteTournament()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Delete this tournament…</button>
       <div id="dzMsg" class="mt-2 text-sm"></div>
     </div>
@@ -213,10 +228,9 @@
         <button onclick="lookupParticipant()" class="bg-blue-600 text-white px-4 py-2 rounded mb-4">Look Up</button>
         <div id="weighForm" class="hidden space-y-3">
           <div id="pInfo" class="bg-slate-50 p-3 rounded font-medium"></div>
-          <select id="species" class="w-full border rounded px-3 py-2" onchange="checkDuplicateSpecies()"></select>
+          <select id="species" class="w-full border rounded px-3 py-2"></select>
           <label class="block text-sm font-medium">Weight (lbs, decimals OK)</label>
-          <input id="weightLbs" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" placeholder="e.g. 2.35" class="w-full border rounded px-3 py-2 text-lg" oninput="checkDuplicateSpecies()" onkeydown="if(event.key==='Enter') submitWeighIn()">
-          <div id="dupBox" class="hidden bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3"></div>
+          <input id="weightLbs" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" placeholder="e.g. 2.35" class="w-full border rounded px-3 py-2 text-lg" onkeydown="if(event.key==='Enter') submitWeighIn()">
           <button onclick="submitWeighIn()" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold">Submit & Print Ticket</button>
         </div>
         <div id="weighMsg" class="mt-2 text-sm"></div>
@@ -226,7 +240,6 @@
           <h3 class="font-semibold">Find / edit tickets</h3>
           <label class="text-xs text-slate-600 flex items-center gap-1"><input type="checkbox" id="tkShowVoid" onchange="renderRecentCatches()"> Show voided</label>
         </div>
-        <div id="heldTickets" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 mb-3 text-sm"></div>
         <input id="tkSearch" type="search" enterkeyhint="search" autocomplete="off" oninput="S.tkLimit = 50; renderRecentCatches()"
           placeholder="Angler name or #, ticket # or code" class="w-full border rounded-lg px-3 py-2 mb-1 text-base">
         <div id="tkCount" class="text-xs text-slate-500 mb-1"></div>
@@ -248,13 +261,16 @@
     </div>
   </section>
 
-  <!-- BIG SCREEN -->
+  <!-- BIG SCREEN: top 10 Overall, top 5 per youth division, top 3 per species; scrolls (speed/pause set in Setup) -->
   <section id="tab-display" class="tab hidden">
-    <div class="bg-black text-white rounded-xl p-8 min-h-[70vh]">
-      <div class="text-center text-sm text-slate-400" id="displayTournament"></div>
-      <div class="text-center text-4xl font-bold mb-6" id="displayTitle">LIVE LEADERBOARD</div>
-      <div id="displayBoard" class="text-3xl space-y-3 max-w-4xl mx-auto"></div>
-      <div class="text-center text-xs text-slate-500 mt-8" id="displayUpdated"></div>
+    <div class="bg-black text-white rounded-xl p-4 md:p-8 h-[80vh] flex flex-col">
+      <img id="displayBanner" alt="" class="hidden w-full h-auto max-h-[18vh] object-contain mb-2 shrink-0">
+      <div class="text-center text-sm text-slate-400 shrink-0" id="displayTournament"></div>
+      <div class="text-center text-4xl font-bold mb-4 shrink-0" id="displayTitle">LIVE LEADERBOARD</div>
+      <div id="displayViewport" class="flex-1 min-h-0">
+        <div id="displayBoard" class="text-3xl max-w-6xl mx-auto"></div>
+      </div>
+      <div class="text-center text-xs text-slate-500 mt-2 shrink-0" id="displayUpdated"></div>
     </div>
   </section>
 </div>
@@ -267,7 +283,7 @@
     <h3 id="delTitle" class="text-lg font-semibold text-red-700 mb-2">Delete tournament?</h3>
     <p class="text-sm mb-2">This permanently deletes <b id="delName"></b> and:</p>
     <ul id="delCounts" class="text-sm list-disc pl-5 mb-3"></ul>
-    <p class="text-sm text-red-700 mb-3">This can&rsquo;t be undone. Other laptops on this tournament will switch to another one, and its public links will show This can't be undone. Other laptops on this tournament will switch to another one, and its public links will show “not available”.ldquo;not availableThis can't be undone. Other laptops on this tournament will switch to another one, and its public links will show “not available”.rdquo;.</p>
+    <p class="text-sm text-red-700 mb-3">This can&rsquo;t be undone. Other laptops on this tournament will switch to another one, and its public links will show &ldquo;not available&rdquo;.</p>
     <label for="delConfirm" class="block text-sm mb-1">Type the tournament name <b id="delNameHint" class="select-all"></b> to confirm:</label>
     <input id="delConfirm" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="deleteConfirmChanged()" class="w-full border rounded px-3 py-2 mb-1">
     <div class="text-xs text-slate-500 mb-3">Must match exactly, including capital letters.</div>
@@ -307,23 +323,34 @@
 </div>
 
 <!-- Walk-up Modal -->
-<div id="modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-  <div class="bg-white rounded-xl p-6 w-full max-w-md">
-    <h3 class="text-lg font-semibold mb-4" id="pmTitle">New Walk-up</h3>
-    <input id="wName" placeholder="Full Name" class="w-full border rounded px-3 py-2 mb-3">
-    <div class="flex gap-2 mb-1">
-      <input id="wYears" type="number" inputmode="numeric" min="0" max="120" step="1" placeholder="Age" oninput="updateDivisionPreview()" class="w-24 border rounded px-3 py-2">
-      <select id="wAge" onchange="updateDivisionPreview()" class="flex-1 border rounded px-3 py-2" title="Age/Division"></select>
+<div id="modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl p-6 w-full max-w-md max-h-[95vh] overflow-y-auto">
+    <h3 class="text-lg font-semibold mb-3" id="pmTitle">New Walk-up</h3>
+    <form id="wForm" onsubmit="saveParticipantModal(); return false;" novalidate>
+    <label class="block text-xs text-slate-600">Full name <span class="text-red-600">*</span></label>
+    <input id="wName" placeholder="Full Name" autocomplete="off" class="w-full border rounded px-3 py-2 mb-2">
+    <div class="flex gap-2 items-end mb-1">
+      <label class="block text-xs text-slate-600 w-24">Age <span class="text-red-600">*</span>
+        <input id="wYears" type="number" inputmode="numeric" min="0" max="120" step="1" placeholder="Age" oninput="updateDivisionPreview()" class="w-full border rounded px-3 py-2 text-base text-slate-900"></label>
+      <label class="block text-xs text-slate-600 flex-1">or birth date (fills in the age)
+        <input id="wBirth" type="date" oninput="birthChanged()" class="w-full border rounded px-3 py-2 text-base text-slate-900"></label>
     </div>
-    <label class="block text-xs text-slate-600 mb-1">Birth date (optional – fills in the age as of the tournament date)</label>
-    <input id="wBirth" type="date" oninput="birthChanged()" class="w-full border rounded px-3 py-2 mb-1">
-    <div id="wDivPreview" class="text-xs mb-3"></div>
-    <input id="wEmail" placeholder="Email (optional)" class="w-full border rounded px-3 py-2 mb-3">
-    <input id="wPhone" placeholder="Phone (optional)" class="w-full border rounded px-3 py-2 mb-4">
+    <div id="wDivPreview" class="text-xs mb-2"></div>
+    <label class="block text-xs text-slate-600">Email <span class="text-red-600">*</span></label>
+    <input id="wEmail" type="email" inputmode="email" autocomplete="off" placeholder="name@example.com" class="w-full border rounded px-3 py-2 mb-2">
+    <label class="block text-xs text-slate-600">Phone <span class="text-red-600">*</span></label>
+    <input id="wPhone" type="tel" inputmode="tel" autocomplete="off" placeholder="(555) 555-1234" class="w-full border rounded px-3 py-2 mb-2">
+    <div class="text-xs text-slate-600 mb-1">Ticket <span class="text-red-600">*</span></div>
+    <div class="grid grid-cols-2 gap-2 mb-2" role="radiogroup">
+      <label class="flex items-center gap-2 border rounded-lg px-3 py-2 has-[:checked]:bg-blue-50 has-[:checked]:border-blue-500"><input type="radio" name="wHoles" value="1"> One hole ticket</label>
+      <label class="flex items-center gap-2 border rounded-lg px-3 py-2 has-[:checked]:bg-blue-50 has-[:checked]:border-blue-500"><input type="radio" name="wHoles" value="2"> Two hole ticket</label>
+    </div>
+    <div id="wMsg" class="text-sm text-red-600 mb-2"></div>
     <div class="flex gap-2">
-      <button onclick="saveParticipantModal()" id="pmSave" class="flex-1 bg-green-600 text-white py-2 rounded">Create + Print Card</button>
-      <button onclick="closeModal('modal')" class="px-4 py-2 border rounded">Cancel</button>
+      <button type="submit" id="pmSave" class="flex-1 bg-green-600 text-white py-2 rounded">Create + Print Card</button>
+      <button type="button" onclick="closeModal('modal')" class="px-4 py-2 border rounded">Cancel</button>
     </div>
+    </form>
   </div>
 </div>
 
@@ -399,7 +426,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261117a"></script>
-<script src="app.js?v=20261117a"></script>
+<script src="config.js?v=20261118a"></script>
+<script src="app.js?v=20261118a"></script>
 </body>
 </html>

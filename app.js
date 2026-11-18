@@ -32,7 +32,7 @@ const S = {
   online: navigator.onLine, channel: null, rtDown: false,
   currentParticipant: null, tab: null,
   board: { data: null, version: null, tid: null, timer: null, at: null },
-  displayIdx: 0, displayTimer: null
+  tkLimit: 50
 };
 const params = new URLSearchParams(location.search); // as loaded; use urlParam() for the live URL
 const SCREEN_MODE = params.get('screen') === '1';
@@ -188,7 +188,7 @@ async function flushQueue(manual) {
   if (flushing) return;
   if (!S.session) { renderConn(); return; }
   flushing = true;
-  let authRetry = 0, heldSeen = false;
+  let authRetry = 0;
   try {
     while (Q.length) {
       const op = Q[0];
@@ -196,9 +196,9 @@ async function flushQueue(manual) {
       try {
         if (op.kind === 'insert') {
           res = op.table === 'catches'
-            ? await sb.from('catches').upsert(op.row, { onConflict: 'id', ignoreDuplicates: true }).select('id, status, ticket_no, void_reason')
+            ? await sb.from('catches').upsert(op.row, { onConflict: 'id', ignoreDuplicates: true }).select('id, status, ticket_no')
             : await sb.from(op.table).upsert(op.row, { onConflict: 'id', ignoreDuplicates: true });
-          if (!res.error && op.table === 'catches' && res.data?.[0]) { op.server = res.data[0]; if (op.server.status === 'held') heldSeen = true; }
+          if (!res.error && op.table === 'catches' && res.data?.[0]) op.server = res.data[0];
         } else {
           res = await sb.from(op.table).update(op.patch).eq('id', op.id).select('id');
           if (!res.error && (!res.data || !res.data.length)) res = { error: { code: 'NOROWS', message: 'Not permitted, or the row does not exist' } };
@@ -219,8 +219,6 @@ async function flushQueue(manual) {
     }
   } finally {
     flushing = false; renderConn(); if (manual) renderQueue();
-    // A weigh-in was held as a duplicate species: fetch the other laptop's ticket so staff can choose.
-    if (heldSeen && S.tid && canReadData()) loadTournamentData();
   }
 }
 
@@ -437,7 +435,7 @@ async function selectTournament(tid) {
   } else {
     unsubscribeRealtime();
   }
-  fillSetupForm(); refreshViews(); restartPolling();
+  fillSetupForm(); refreshViews(); restartPolling(); updateHeaderImage();
 }
 
 function cacheKey() { return 'ift.cache2.' + S.tid; } // v2: decimal lbs, no check-in
@@ -479,7 +477,7 @@ async function loadTournamentData() {
     Object.assign(S, { t: t.data, species: sp.data, configs: cf.data, participants: parts, catches });
     Q.filter(op => op.tid === tid).forEach(op => applyLocal(op, true));
     saveCache(); setOnline(true);
-    ensureCodePool();
+    ensureCodePool(); updateHeaderImage();
   } catch (e) {
     if (isNetErr(e)) setOnline(false); else console.warn('Load failed:', e.message || e);
   }
@@ -529,7 +527,7 @@ function showTab(name) {
     b.classList.toggle('bg-blue-600', on); b.classList.toggle('text-white', on);
     b.classList.toggle('rounded-t', on); b.classList.toggle('text-slate-600', !on);
   });
-  if (name !== 'display') { clearInterval(S.displayTimer); S.displayTimer = null; }
+  if (name !== 'display') stopDisplay();
   refreshViews(); restartPolling();
   if (name === 'participants') $('checkNum').focus();
   if (name === 'weighin') $('scanNum').focus();
@@ -542,8 +540,7 @@ function refreshViews() {
   if (S.tab === 'participants') renderParticipants();
   if (S.tab === 'weighin') renderRecentCatches();
   if (S.tab === 'leaderboard') renderLeaderboard();
-  if (S.tab === 'setup') renderConfigs();
-  if (S.tab === 'display' && !S.displayTimer) startDisplay();
+  if (S.tab === 'display') renderDisplay();
 }
 
 // ---------------------------------------------------------------- setup (admin)
@@ -552,12 +549,15 @@ function newTournamentForm() {
   $('setupTitle').textContent = 'New Tournament';
   $('tName').value = ''; $('tYear').value = new Date().getFullYear(); $('tDate').value = '';
   $('tStatus').value = 'setup'; $('tPublic').checked = true;
-  renderDivisionRows([{ name: '12 & Under', min: null, max: 12 }, { name: '13-17', min: 13, max: 17 }]); // adults (18+) are only in Overall
+  renderDivisionRows(DEFAULT_DIVISIONS); // Overall is implicit (everyone); adults (18+) are only in Overall
+  $('scrSpeed').value = 40; $('scrPause').value = 5; $('hdrUrl').value = ''; $('screenPreview').classList.add('hidden');
   $('speciesList').value = 'Walleye, Perch, Pike, Crappie';
   $('setupMsg').textContent = ''; $('publicLinks').innerHTML = '';
   $('dangerZone').classList.add('hidden');
 }
-// ---- Age/Division ranges
+// ---- Youth divisions (age ranges). Overall is not a division: everyone is in it.
+const DEFAULT_DIVISIONS = [{ name: 'Teenage 13 to 17', min: 13, max: 17 }, { name: 'Kids 12 & Under', min: null, max: 12 }];
+function isOverallName(n) { return String(n || '').trim().toLowerCase() === 'overall'; }
 // Ordered divisions for a tournament: [{name, min, max, suggested}]
 function divisionsOf(t, suggest) {
   const names = t?.age_groups || [], ranges = t?.age_group_ranges || {};
@@ -583,7 +583,7 @@ function suggestRanges(list) {
 function renderDivisionRows(list) {
   $('divisionRows').innerHTML = list.map(d => `
     <div class="div-row flex flex-wrap gap-2 items-center">
-      <input class="dv-name border rounded px-2 py-1 flex-1 min-w-[8rem]" value="${esc(d.name)}" placeholder="Age/Division name">
+      <input class="dv-name border rounded px-2 py-1 flex-1 min-w-[8rem]" value="${esc(d.name)}" placeholder="Youth division name, e.g. Kids 12 & Under">
       <label class="text-xs">Min <input class="dv-min border rounded px-2 py-1 w-16 ${d.suggested ? 'bg-amber-50' : ''}" type="number" min="0" max="120" value="${d.min ?? ''}"></label>
       <label class="text-xs">Max <input class="dv-max border rounded px-2 py-1 w-16 ${d.suggested ? 'bg-amber-50' : ''}" type="number" min="0" max="120" value="${d.max ?? ''}"></label>
       ${d.suggested ? '<span class="text-xs text-amber-700">suggested – check &amp; save</span>' : ''}
@@ -600,7 +600,8 @@ function readDivisionRows(loose) {
   });
   if (loose) return { list };
   const named = list.filter(d => d.name);
-  if (new Set(named.map(d => d.name.toLowerCase())).size !== named.length) return { error: 'Age/Division names must be unique.' };
+  if (named.some(d => isOverallName(d.name))) return { error: 'Overall is automatic (everyone is in it) – remove it from the youth divisions.' };
+  if (new Set(named.map(d => d.name.toLowerCase())).size !== named.length) return { error: 'Youth division names must be unique.' };
   const bad = named.find(d => d.min != null && d.max != null && d.min > d.max);
   if (bad) return { error: `${bad.name}: Min is greater than Max.` };
   return { list: named };
@@ -608,9 +609,11 @@ function readDivisionRows(loose) {
 function checkDivisionRows() {
   const { list } = readDivisionRows(true); const w = [];
   const named = list.filter(d => d.name);
-  named.filter(d => d.min == null && d.max == null).forEach(d => w.push(`${d.name} has no age range, so nobody is placed there automatically.`));
-  for (let i = 0; i < named.length; i++) for (let j = i + 1; j < named.length; j++) {
-    const a = named[i], b = named[j];
+  if (named.some(d => isOverallName(d.name))) w.push('Overall is automatic (everyone is in it) – remove the "Overall" row.');
+  const youth = named.filter(d => !isOverallName(d.name));
+  youth.filter(d => d.min == null && d.max == null).forEach(d => w.push(`${d.name} has no age range, so nobody is placed there.`));
+  for (let i = 0; i < youth.length; i++) for (let j = i + 1; j < youth.length; j++) {
+    const a = youth[i], b = youth[j];
     if ((a.min != null || a.max != null) && (b.min != null || b.max != null) && (a.min ?? 0) <= (b.max ?? 999) && (b.min ?? 0) <= (a.max ?? 999))
       w.push(`${a.name} and ${b.name} overlap; the first one listed wins.`);
   }
@@ -629,23 +632,23 @@ function overallOnlyAge(t, age) {
   const ds = divisionsOf(t).filter(d => d.min != null || d.max != null);
   return ds.length > 0 && ds.every(d => d.max != null) && age > Math.max(...ds.map(d => d.max));
 }
-// 'ok' | 'overall' (adult, Overall only) | 'noage' | 'nomatch' (an age no range covers, e.g. a gap)
+// 'ok' (Overall + a youth division) | 'overall' (adult, Overall only) | 'noage' | 'nomatch' (an age no range covers)
 function divisionState(p, t = S.t) {
   if (p.age_group) return 'ok';
   if (p.age == null) return 'noage';
   return overallOnlyAge(t, p.age) ? 'overall' : 'nomatch';
 }
 function needsDivisionFix(p) { const s = divisionState(p); return s === 'noage' || s === 'nomatch'; }
-function divisionText(p) { return p.age_group || (divisionState(p) === 'overall' ? 'Overall only' : 'No Age/Division'); }
+function divisionText(p) { return p.age_group ? `Overall + ${p.age_group}` : divisionState(p) === 'overall' ? 'Overall' : 'Overall (age missing)'; }
 function divisionLabel(p) {
   const st = divisionState(p);
-  if (st === 'overall') return '<span class="text-slate-600">Overall only (adult)</span>';
-  if (st === 'noage') return '<span class="text-red-700 font-medium">⚠ Age missing – needed for the age categories</span>';
-  if (st === 'nomatch') return `<span class="text-red-700 font-medium">⚠ No Age/Division matches age ${p.age}</span>`;
+  if (st === 'overall') return '<span class="text-slate-600">Overall</span>';
+  if (st === 'noage') return '<span class="text-red-700 font-medium">⚠ Age missing – needed to place kids in a youth division</span>';
+  if (st === 'nomatch') return `<span class="text-red-700 font-medium">⚠ No youth division matches age ${p.age}</span>`;
   const unknown = S.t && !(S.t.age_groups || []).includes(p.age_group);
-  return esc(p.age_group) + (p.age_group_override ? ' <span class="text-xs bg-amber-100 text-amber-800 px-1 rounded">set by hand</span>' : '')
-    + (unknown ? ' <span class="text-xs bg-red-100 text-red-800 px-1 rounded">not in this tournament\'s Age/Division list</span>' : '');
+  return 'Overall + ' + esc(p.age_group) + (unknown ? ' <span class="text-xs bg-red-100 text-red-800 px-1 rounded">not in this tournament\'s youth divisions</span>' : '');
 }
+function holesText(p) { return p.hole_tickets === 2 ? 'Two hole ticket' : p.hole_tickets === 1 ? 'One hole ticket' : ''; }
 function fillSetupForm() {
   $('dangerZone').classList.toggle('hidden', !(S.t && hasRole('admin')));
   if (S.t) $('dzName').textContent = S.t.name;
@@ -656,7 +659,9 @@ function fillSetupForm() {
   $('tStatus').value = S.t.status; $('tPublic').checked = !!S.t.public_visible;
   renderDivisionRows(divisionsOf(S.t, true));
   $('speciesList').value = S.species.map(s => s.name).join(', ');
+  $('scrSpeed').value = S.t.screen_scroll_speed ?? 40; $('scrPause').value = S.t.screen_pause_seconds ?? 5; $('hdrUrl').value = S.t.header_image_url || '';
   const base = location.origin + location.pathname;
+  $('screenPreview').href = `${base}?t=${S.t.id}&screen=1`; $('screenPreview').classList.remove('hidden');
   $('publicLinks').innerHTML = `Public leaderboard: <a class="text-blue-700 underline" href="${base}?t=${S.t.id}&view=leaderboard" target="_blank">${esc(base)}?t=${S.t.id}&amp;view=leaderboard</a><br>
     Big screen (TV, no sign-in): <a class="text-blue-700 underline" href="${base}?t=${S.t.id}&screen=1" target="_blank">${esc(base)}?t=${S.t.id}&amp;screen=1</a>`;
 }
@@ -705,6 +710,39 @@ async function saveTournament() {
   msg('setupMsg', 'Tournament saved!' + (problems.length ? ' Note: ' + problems.join('; ') : ''), !problems.length);
 }
 
+async function saveScreenSettings() {
+  if (!hasRole('admin')) return msg('screenMsg', 'Admin only', false);
+  if (!S.t || S.editingNew) return msg('screenMsg', 'Save the tournament first.', false);
+  const speed = parseInt($('scrSpeed').value, 10), pause = parseInt($('scrPause').value, 10), url = $('hdrUrl').value.trim() || null;
+  if (!(speed >= 5 && speed <= 400)) return msg('screenMsg', 'Scroll speed must be 5–400 pixels per second.', false);
+  if (!(pause >= 0 && pause <= 120)) return msg('screenMsg', 'Pause must be 0–120 seconds.', false);
+  if (url && !/^(https:\/\/|assets\/)/i.test(url)) return msg('screenMsg', 'Header image URL must start with https:// or assets/', false);
+  msg('screenMsg', 'Saving…');
+  const { error } = await sb.from('tournaments').update({ screen_scroll_speed: speed, screen_pause_seconds: pause, header_image_url: url }).eq('id', S.tid);
+  if (error) return msg('screenMsg', error.message, false);
+  Object.assign(S.t, { screen_scroll_speed: speed, screen_pause_seconds: pause, header_image_url: url }); saveCache(); updateHeaderImage();
+  msg('screenMsg', 'Saved – the big screen picks this up within about 15 seconds.');
+}
+
+// ---- Header graphic: the tournament's header_image_url, else assets/header.png, else the text title.
+const HEADER_DEFAULT = 'assets/header.png';
+function updateHeaderImage() {
+  const url = S.t?.header_image_url || S.board.data?.tournament?.header_image_url || HEADER_DEFAULT;
+  const img = $('headerImg'); if (!img || img.dataset.req === url) return;
+  img.dataset.req = url; img.dataset.want = url;
+  const show = ok => {
+    $('headerBanner').classList.toggle('hidden', !ok); $('headerText').classList.toggle('hidden', ok);
+    const tv = $('displayBanner'); if (tv) { tv.classList.toggle('hidden', !ok); if (ok) tv.src = img.src; }
+  };
+  img.onload = () => { if (img.dataset.want === url) show(true); };
+  img.onerror = () => {
+    if (img.dataset.want !== url) return;
+    if (url !== HEADER_DEFAULT) { img.dataset.want = HEADER_DEFAULT; img.src = HEADER_DEFAULT; return; }
+    show(false);
+  };
+  img.src = url;
+}
+
 // ---- Delete tournament (admin): typed-name confirmation, done server-side in one transaction.
 function openDeleteTournament() {
   if (!S.t || !hasRole('admin')) return;
@@ -712,7 +750,7 @@ function openDeleteTournament() {
   const n = (x, w) => `${x} ${w}${x === 1 ? '' : 's'}`;
   $('delName').textContent = S.t.name; $('delNameHint').textContent = S.t.name;
   $('delCounts').innerHTML = [n(S.participants.length, 'participant'), n(S.catches.length, 'weigh-in'),
-    n(S.species.length, 'species').replace(/speciess/, 'species'), n(S.configs.length, 'leaderboard')].map(x => `<li>${esc(x)}</li>`).join('');
+    n(S.species.length, 'species').replace(/speciess/, 'species')].map(x => `<li>${esc(x)}</li>`).join('');
   $('delConfirm').value = ''; $('delMsg').textContent = ''; deleteConfirmChanged();
   S.deletingTid = S.t.id;
   openModal('deleteModal'); setTimeout(() => $('delConfirm').focus(), 0);
@@ -756,80 +794,6 @@ async function forgetTournament(tid, purge = true) {
 async function tournamentStillExists(tid) {
   const { data, error } = await sb.from('tournaments').select('id').eq('id', tid).maybeSingle();
   return error ? true : !!data; // on errors assume it exists (offline etc.)
-}
-
-// Special picker values for species / age-group boards with no single species / group chosen.
-const SPLIT_OPTS = { '': 'tabs', '__grouped__': 'grouped', '__combined__': 'combined' };
-function boardFilterOptions(c) {
-  const mode = c.split_mode || 'tabs';
-  const special = (each, all, any, hasFilter) =>
-    `<option value="" ${!hasFilter && mode === 'tabs' ? 'selected' : ''}>${each}</option>` +
-    `<option value="__grouped__" ${!hasFilter && mode === 'grouped' ? 'selected' : ''}>${all}</option>` +
-    `<option value="__combined__" ${!hasFilter && mode === 'combined' ? 'selected' : ''}>${any}</option>`;
-  if (c.board_type === 'species') return special('Each species (separate tabs)', 'All species, grouped on one board', 'Any species, combined ranking', !!c.species_id)
-    + S.species.map(s => `<option value="${s.id}" ${c.species_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
-  if (c.board_type === 'age_group') return special('Each Age/Division (separate tabs)', 'All Age/Divisions, grouped on one board', 'Any Age/Division, combined ranking', !!c.age_group)
-    + (S.t?.age_groups || []).map(g => `<option value="${esc(g)}" ${c.age_group === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
-  return '<option value="">All anglers</option>';
-}
-function renderConfigs() {
-  const el = $('configList'); if (!el) return;
-  if (!S.t) { el.innerHTML = '<p class="text-slate-500">Save a tournament first.</p>'; return; }
-  const filterOpts = boardFilterOptions;
-  el.innerHTML = S.configs.map(c => `
-    <div class="flex flex-wrap gap-2 items-center border rounded p-2" data-id="${c.id}">
-      <input class="cf-order border rounded px-2 py-1 w-14" type="number" value="${c.sort_order}" title="Order">
-      <input class="cf-title border rounded px-2 py-1 flex-1 min-w-[10rem]" value="${esc(c.title)}">
-      <select class="cf-type border rounded px-2 py-1" onchange="this.closest('[data-id]').querySelector('.cf-filter').innerHTML = boardFilterOptions({ board_type: this.value })">
-        ${['overall', 'species', 'age_group'].map(t => `<option value="${t}" ${c.board_type === t ? 'selected' : ''}>${{ overall: 'Overall', species: 'Species', age_group: 'Age/Division' }[t]}</option>`).join('')}
-      </select>
-      <select class="cf-filter border rounded px-2 py-1">${filterOpts(c)}</select>
-      <label class="text-sm">Metric <select class="cf-scoring border rounded px-2 py-1" title="Total weight = each angler's fish added up (one per species). Biggest fish = their single heaviest fish.">
-        <option value="total_weight" ${c.scoring === 'total_weight' ? 'selected' : ''}>Total weight (one fish per species)</option>
-        <option value="biggest_fish" ${c.scoring === 'biggest_fish' ? 'selected' : ''}>Biggest single fish</option>
-      </select></label>
-      <label>Top <select class="cf-top border rounded px-2 py-1">${topOptions(c.top_n)}</select></label>
-      <label class="flex items-center gap-1"><input class="cf-enabled" type="checkbox" ${c.enabled ? 'checked' : ''}> On</label>
-      <button onclick="saveBoardConfig('${c.id}')" class="bg-blue-600 text-white px-2 py-1 rounded">Save</button>
-      <button onclick="deleteBoardConfig('${c.id}')" class="border px-2 py-1 rounded text-red-700">Delete</button>
-    </div>`).join('') || '<p class="text-slate-500">No leaderboards configured.</p>';
-}
-function topOptions(cur) {
-  const vals = [3, 5, 10, 15, 20, 25, 50, 100];
-  if (cur != null && !vals.includes(cur)) vals.push(cur), vals.sort((x, y) => x - y);
-  return `<option value="all" ${cur == null ? 'selected' : ''}>All</option>` + vals.map(v => `<option value="${v}" ${v === cur ? 'selected' : ''}>${v}</option>`).join('');
-}
-async function saveBoardConfig(id) {
-  const row = document.querySelector(`[data-id="${id}"]`);
-  const type = row.querySelector('.cf-type').value, raw = row.querySelector('.cf-filter').value;
-  const special = raw in SPLIT_OPTS, filter = special ? null : raw;
-  const patch = {
-    title: row.querySelector('.cf-title').value.trim() || 'Leaderboard', board_type: type,
-    scoring: row.querySelector('.cf-scoring').value, top_n: row.querySelector('.cf-top').value === 'all' ? null : (parseInt(row.querySelector('.cf-top').value, 10) || 10),
-    sort_order: parseInt(row.querySelector('.cf-order').value, 10) || 0, enabled: row.querySelector('.cf-enabled').checked,
-    split_mode: type !== 'overall' && special ? SPLIT_OPTS[raw] : 'tabs',
-    species_id: type === 'species' ? filter : null, age_group: type === 'age_group' ? filter : null
-  };
-  const { error } = await sb.from('leaderboard_configs').update(patch).eq('id', id);
-  if (error) return msg('configMsg', error.message, false);
-  msg('configMsg', 'Saved'); await reloadConfigs();
-}
-async function addBoardConfig() {
-  if (!S.t) return;
-  const { error } = await sb.from('leaderboard_configs').insert({ tournament_id: S.tid, title: 'New board', board_type: 'overall', scoring: 'total_weight', top_n: 10, sort_order: (S.configs.length + 1) * 10 });
-  if (error) return msg('configMsg', error.message, false);
-  await reloadConfigs();
-}
-async function deleteBoardConfig(id) {
-  if (!confirm('Delete this leaderboard?')) return;
-  const { error } = await sb.from('leaderboard_configs').delete().eq('id', id);
-  if (error) return msg('configMsg', error.message, false);
-  await reloadConfigs();
-}
-async function reloadConfigs() {
-  const { data } = await sb.from('leaderboard_configs').select('*').eq('tournament_id', S.tid).order('sort_order').order('created_at');
-  if (data) { S.configs = data; saveCache(); }
-  renderConfigs();
 }
 
 function headerIndex(headers, ...names) { return headers.findIndex(h => names.includes(h)); }
@@ -876,8 +840,9 @@ async function buildImportPlan(text, t, existing) {
   const h = rows[0].map(x => x.toLowerCase().replace(/[^a-z]/g, ''));
   const bi = headerIndex(h, 'birthdate', 'dob', 'dateofbirth', 'birthday', 'bday', 'born');
   const ni = h.findIndex((x, i) => x.includes('name') && i !== bi), yi = headerIndex(h, 'age', 'ageyears', 'years');
-  const ai = h.findIndex(x => x.includes('division') || x.includes('group'));
-  const ei = headerIndex(h, 'email', 'emailaddress'), pi = headerIndex(h, 'phone', 'phonenumber', 'cell');
+  const ai = h.findIndex(x => x.includes('division') || x.includes('group')); // ignored: divisions are automatic
+  const ei = headerIndex(h, 'email', 'emailaddress', 'mail'), pi = headerIndex(h, 'phone', 'phonenumber', 'cell', 'cellphone', 'mobile');
+  const hi = h.findIndex(x => /^(holetickets?|holes|numberofholes|holecount|tickettype|ticket|tickets)$/.test(x));
   const ci = headerIndex(h, 'id', 'code', 'participantid', 'participantcode', 'number'); // ignored: numbers are always assigned
   if (ni === -1) return { error: 'CSV must have a "name" column.' };
   const asOf = asOfDate(t), seen = new Set(existing), plan = [];
@@ -888,7 +853,7 @@ async function buildImportPlan(text, t, existing) {
     if (!name) { item.status = 'skip'; item.warnings.push('no name – skipped'); continue; }
     item.code = null; // participant numbers are always assigned by the server
     if (ci >= 0 && (r[ci] || '').trim()) item.ignoredId = r[ci].trim();
-    item.email = ei >= 0 ? r[ei] || null : null; item.phone = pi >= 0 ? r[pi] || null : null;
+    item.email = ei >= 0 ? (r[ei] || '').trim() || null : null; item.phone = pi >= 0 ? (r[pi] || '').trim() || null : null;
     item.id = await hashUuid([t.id, name.toLowerCase(), (item.email || '').toLowerCase(), item.phone || '', item.code || ''].join('|'));
     if (seen.has(item.id)) { item.status = 'already'; item.warnings.push('already imported – skipped'); continue; }
     seen.add(item.id);
@@ -906,18 +871,20 @@ async function buildImportPlan(text, t, existing) {
       item.birth = null;
     }
     item.age = fileAge ?? birthAge;
-    let fileDiv = ai >= 0 ? ((r[ai] || '').trim() || null) : null;
-    if (fileDiv && !(t.age_groups || []).includes(fileDiv)) {
-      if (item.age == null) item.warnings.push(`Age/Division "${fileDiv}" isn't one of this tournament's (${(t.age_groups || []).join(', ')}) – ignored`);
-      fileDiv = null;
-    }
-    item.manual = item.age == null && !!fileDiv;
-    item.division = item.manual ? fileDiv : divisionForAge(t, item.age);
-    if (item.age == null && !item.birthRaw && !item.ageRaw) item.warnings.push(fileDiv ? `no age or birth date – using "${fileDiv}" from the file (set by hand)` : 'no age or birth date');
+    if (!item.email) item.warnings.push('email missing');
+    else if (!validEmail(item.email)) item.warnings.push(`email "${item.email}" doesn't look right`);
+    if (!item.phone) item.warnings.push('phone missing');
+    else if (!validPhone(item.phone)) item.warnings.push(`phone "${item.phone}" doesn't look right`);
+    item.holesRaw = hi >= 0 ? (r[hi] || '').trim() : '';
+    item.holes = parseHoles(item.holesRaw);
+    if (item.holesRaw && item.holes == null) item.warnings.push(`hole tickets "${item.holesRaw}" isn't 1 or 2 – left blank`);
+    item.division = divisionForAge(t, item.age);
+    if (item.age == null && !item.birthRaw && !item.ageRaw) item.warnings.push('no age or birth date (Overall only until an age is added)');
     item.overallOnly = !item.division && overallOnlyAge(t, item.age);
-    if (!item.division && !item.overallOnly) item.warnings.push(item.age == null ? 'no Age/Division (age unknown)' : `no Age/Division matches age ${item.age}`);
+    if (!item.division && !item.overallOnly && item.age != null) item.warnings.push(`no youth division matches age ${item.age}`);
   }
-  return { plan, asOf, hasBirth: bi >= 0, hasAge: yi >= 0, idsIgnored: plan.filter(p => p.ignoredId).length, idHeader: ci >= 0 ? rows[0][ci] : null };
+  return { plan, asOf, hasBirth: bi >= 0, hasAge: yi >= 0, idsIgnored: plan.filter(p => p.ignoredId).length, idHeader: ci >= 0 ? rows[0][ci] : null,
+    divHeader: ai >= 0 && ai !== ni ? rows[0][ai] : null, noEmailCol: ei < 0, noPhoneCol: pi < 0 };
 }
 
 async function previewParticipantsCSV() {
@@ -930,10 +897,13 @@ async function previewParticipantsCSV() {
   $('importMsg').textContent = '';
   $('importSummary').innerHTML = `${plan.length} rows • <b>${newRows.length} to import</b> • ${plan.length - newRows.length} skipped • `
     + `<span class="${warned.length ? 'text-amber-700 font-medium' : ''}">${warned.length} with warnings</span> • ages as of ${esc(res.asOf)}${S.t.event_date ? ' (event date)' : ' (today – no event date set)'}`
-    + (res.idHeader ? `<div class="mt-1 text-slate-600">Note: the file's “${esc(res.idHeader)}” column is ignored${res.idsIgnored ? ` (${res.idsIgnored} value${res.idsIgnored === 1 ? '' : 's'})` : ''} – participant numbers are always assigned automatically.</div>` : '');
+    + (res.idHeader ? `<div class="mt-1 text-slate-600">Note: the file's “${esc(res.idHeader)}” column is ignored${res.idsIgnored ? ` (${res.idsIgnored} value${res.idsIgnored === 1 ? '' : 's'})` : ''} – participant numbers are always assigned automatically.</div>` : '')
+    + (res.divHeader ? `<div class="mt-1 text-slate-600">Note: the file's “${esc(res.divHeader)}” column is ignored – everyone is in Overall and kids are placed in their youth division from their age.</div>` : '')
+    + (res.noEmailCol || res.noPhoneCol ? `<div class="mt-1 text-amber-700 font-medium">This file has no ${[res.noEmailCol && 'email', res.noPhoneCol && 'phone'].filter(Boolean).join(' or ')} column – email and phone are required for every angler.</div>` : '');
   $('importRows').innerHTML = plan.map(p => `<tr class="border-t ${p.status !== 'new' ? 'text-slate-400' : p.warnings.length ? 'bg-amber-50' : ''}">
       <td class="p-1">${p.line}</td><td class="p-1">${esc(p.name)}</td><td class="p-1">${esc(p.ageRaw || '')}</td><td class="p-1">${esc(p.birthRaw || '')}</td>
-      <td class="p-1 font-medium">${p.age ?? ''}</td><td class="p-1">${p.division ? esc(p.division) + (p.manual ? ' <span class="text-amber-700">(by hand)</span>' : '') : (p.status === 'new' ? (p.overallOnly ? '<span class="text-slate-500">Overall only</span>' : '<span class="text-red-700">—</span>') : '')}</td>
+      <td class="p-1 font-medium">${p.age ?? ''}</td><td class="p-1">${p.division ? esc(p.division) : (p.status === 'new' ? (p.overallOnly ? '<span class="text-slate-500">Overall only</span>' : '<span class="text-red-700">—</span>') : '')}</td>
+      <td class="p-1">${p.holes ?? ''}</td>
       <td class="p-1 ${p.status === 'new' ? 'text-amber-800' : ''}">${p.warnings.map(esc).join('; ')}</td></tr>`).join('');
   $('importGo').textContent = `Import ${newRows.length}`;
   $('importGo').disabled = !newRows.length;
@@ -966,7 +936,7 @@ async function importParticipantsCSV() {
   const res = S.importPlan; if (!res) return;
   const source = $('csvSource').value;
   const out = res.plan.filter(p => p.status === 'new').map(p => ({ id: p.id, tournament_id: S.tid, display_name: p.name,
-    age: p.age, birth_date: p.birth, age_group: p.division, age_group_override: p.manual,
+    age: p.age, birth_date: p.birth, age_group: p.division, age_group_override: false, hole_tickets: p.holes,
     email: p.email, phone: p.phone, participant_code: p.code, source }));
   if (!out.length) return msg('importMsg', 'Nothing new to import (already imported?).');
   msg('importMsg', `Importing ${out.length}…`);
@@ -976,19 +946,20 @@ async function importParticipantsCSV() {
   }
   $('csvFile').value = ''; csvChosen(true); cancelImport();
   await loadTournamentData();
-  const missing = S.participants.filter(p => !p.age_group).length;
-  msg('importMsg', `Imported ${out.length} participants.` + (missing ? ` ${missing} participant(s) have no Age/Division – they're flagged on the Participants tab.` : ''));
+  const missing = S.participants.filter(needsDivisionFix).length, noContact = out.filter(p => !p.email || !p.phone).length;
+  msg('importMsg', `Imported ${out.length} participants.` + (missing ? ` ${missing} participant(s) have no age – they're flagged on the Participants tab.` : '')
+    + (noContact ? ` ${noContact} imported without an email or phone – add them on the Participants tab.` : ''));
 }
 
 function exportParticipants() {
-  const rows = [['id', 'name', 'age', 'birth_date', 'Age/Division', 'division_set_by_hand', 'email', 'phone', 'source', 'created_at']]
+  const rows = [['id', 'name', 'age', 'birth_date', 'youth_division', 'hole_tickets', 'email', 'phone', 'source', 'created_at']]
     .concat(S.participants.slice().sort((a, b) => (a.participant_code || '').localeCompare(b.participant_code || ''))
-      .map(p => [p.participant_code, p.display_name, p.age ?? '', p.birth_date ?? '', p.age_group ?? '', p.age_group_override ? 'yes' : 'no', p.email, p.phone, p.source, p.created_at]));
+      .map(p => [p.participant_code, p.display_name, p.age ?? '', p.birth_date ?? '', p.age_group ?? '', p.hole_tickets ?? '', p.email, p.phone, p.source, p.created_at]));
   download(`${slug(S.t?.name)}-participants.csv`, toCSV(rows));
 }
 function exportCatches() {
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
-  const rows = [['ticket_no', 'ticket_code', 'ticket_id', 'id', 'name', 'Age/Division', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason', 'note', 'last_changed_at']]
+  const rows = [['ticket_no', 'ticket_code', 'ticket_id', 'id', 'name', 'youth_division', 'species', 'lbs', 'station', 'weighed_at', 'status', 'void_reason', 'note', 'last_changed_at']]
     .concat(S.catches.slice().sort((a, b) => (a.weighed_at || '').localeCompare(b.weighed_at || '')).map(c => {
       const p = pById[c.participant_id] || {};
       return [c.ticket_no, ticketCode(c), c.id, p.participant_code, p.display_name, p.age_group, sById[c.species_id]?.name, Number(c.weight_lbs).toFixed(2), c.station, c.weighed_at, c.status, c.void_reason, c.note, c.updated_at];
@@ -997,17 +968,13 @@ function exportCatches() {
 }
 function exportLeaderboard() {
   const data = currentBoards();
-  const rows = [['board', 'section', 'rank', 'name', 'Age/Division', 'fish', 'lbs']];
-  (data?.boards || []).forEach(b => boardSections(b).forEach(sec => sec.rows.forEach(r => rows.push([b.title, sec.name || '', r.rank, r.name, r.group, r.fish, Number(r.lbs).toFixed(2)]))));
+  const rows = [['board', 'section', 'rank', 'name', 'species', 'lbs']];
+  (data?.boards || []).forEach(b => boardSections(b).forEach(sec => sec.rows.forEach(r => rows.push([b.title, sec.name || '', r.rank, r.name, r.species, Number(r.lbs).toFixed(2)]))));
   download(`${slug(S.t?.name || data?.tournament?.name)}-leaderboard.csv`, toCSV(rows));
 }
 
 // ---------------------------------------------------------------- gate
 function populateSelects() {
-  const groups = S.t?.age_groups || [];
-  const curAge = $('wAge').value;
-  $('wAge').innerHTML = '<option value="">Age/Division: automatic from age</option>' + groups.map(a => `<option value="${esc(a)}">${esc(a)} (set by hand)</option>`).join('');
-  $('wAge').value = curAge;
   const cur = $('species').value;
   $('species').innerHTML = S.species.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   if (cur) $('species').value = cur;
@@ -1045,8 +1012,17 @@ function openParticipantModal(id) {
   $('wName').value = p?.display_name || ''; $('wYears').value = p?.age ?? ''; $('wBirth').value = p?.birth_date || '';
   $('wYears').disabled = !!p?.birth_date;
   $('wEmail').value = p?.email || ''; $('wPhone').value = p?.phone || '';
-  $('wAge').value = p?.age_group_override ? p.age_group : '';
+  document.querySelectorAll('input[name="wHoles"]').forEach(r => { r.checked = String(p?.hole_tickets ?? '') === r.value; });
+  $('wMsg').textContent = '';
   updateDivisionPreview(); openModal('modal'); $('wName').focus();
+}
+function validEmail(v) { return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/.test(String(v || '').trim()); }
+function validPhone(v) { const d = String(v || '').replace(/\D/g, ''); return d.length >= 7 && d.length <= 15; }
+function parseHoles(v) {
+  const t = String(v ?? '').trim().toLowerCase(); if (!t) return null;
+  if (/^(1|one|single|1[\s-]*holes?|one[\s-]*holes?)( ticket)?$/.test(t)) return 1;
+  if (/^(2|two|double|2[\s-]*holes?|two[\s-]*holes?)( ticket)?$/.test(t)) return 2;
+  return null;
 }
 function readAge(v) { v = String(v ?? '').trim(); return /^\d{1,3}$/.test(v) && +v <= 120 ? parseInt(v, 10) : null; }
 function birthChanged() {
@@ -1057,21 +1033,28 @@ function birthChanged() {
 }
 function updateDivisionPreview() {
   const el = $('wDivPreview'); if (!el) return;
-  if ($('wAge').value) { el.innerHTML = `<span class="text-amber-800">Age/Division set by hand: ${esc($('wAge').value)}</span>`; return; }
   const age = readAge($('wYears').value), d = divisionForAge(S.t, age);
-  el.innerHTML = d ? `<span class="text-green-700">Age/Division: ${esc(d)}</span>`
-    : overallOnlyAge(S.t, age) ? '<span class="text-slate-600">Adult – Overall only (no age category)</span>'
-    : `<span class="text-red-700">⚠ ${age == null ? 'Enter an age to place them in an age category' : 'No Age/Division matches age ' + age}</span>`;
+  el.innerHTML = d ? `<span class="text-green-700">Overall + ${esc(d)}</span>`
+    : overallOnlyAge(S.t, age) ? '<span class="text-slate-600">Overall (adult)</span>'
+    : `<span class="text-red-700">${age == null ? 'Enter an age or birth date – kids are placed in their youth division automatically' : '⚠ No youth division matches age ' + age}</span>`;
 }
 function saveParticipantModal() {
-  const name = $('wName').value.trim(); if (!name) return;
+  const bad = (text, field) => { $('wMsg').textContent = text; field?.focus(); };
+  const name = $('wName').value.trim(); if (!name) return bad('Enter the full name.', $('wName'));
   const birth = $('wBirth').value || null;
-  if (birth && (birth > asOfDate(S.t) || ageOn(birth, asOfDate(S.t)) > 120)) return alert('That birth date is after the tournament date or more than 120 years ago.');
+  if (birth && (birth > asOfDate(S.t) || ageOn(birth, asOfDate(S.t)) > 120)) return bad('That birth date is after the tournament date or more than 120 years ago.', $('wBirth'));
   const yearsRaw = $('wYears').value.trim(), age = birth ? ageOn(birth, asOfDate(S.t)) : readAge(yearsRaw);
-  if (!birth && yearsRaw && age == null) return alert('Age must be a whole number from 0 to 120.');
-  const manual = $('wAge').value || null;
-  const fields = { display_name: name, age, birth_date: birth, age_group: manual || divisionForAge(S.t, age), age_group_override: !!manual,
-    email: $('wEmail').value.trim() || null, phone: $('wPhone').value.trim() || null };
+  if (!birth && !yearsRaw) return bad('Enter the age (or birth date).', $('wYears'));
+  if (!birth && age == null) return bad('Age must be a whole number from 0 to 120.', $('wYears'));
+  const email = $('wEmail').value.trim(), phone = $('wPhone').value.trim();
+  if (!email) return bad('Email is required.', $('wEmail'));
+  if (!validEmail(email)) return bad('That email doesn\'t look right (e.g. name@example.com).', $('wEmail'));
+  if (!phone) return bad('Phone number is required.', $('wPhone'));
+  if (!validPhone(phone)) return bad('Enter a phone number with at least 7 digits.', $('wPhone'));
+  const holes = document.querySelector('input[name="wHoles"]:checked')?.value;
+  if (!holes) return bad('Choose a one hole or two hole ticket.');
+  const fields = { display_name: name, age, birth_date: birth, age_group: divisionForAge(S.t, age), age_group_override: false,
+    email, phone, hole_tickets: Number(holes) };
   closeModal('modal');
   if (S.editingParticipant) {
     enqueue({ kind: 'update', table: 'participants', id: S.editingParticipant, patch: fields });
@@ -1091,13 +1074,17 @@ function renderParticipants() {
   const list = S.participants.filter(p => f === '!' ? needsDivisionFix(p) : !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
     .sort((a, b) => (a.participant_code || 'z').localeCompare(b.participant_code || 'z'));
   const noDiv = S.participants.filter(needsDivisionFix).length, adults = S.participants.filter(p => divisionState(p) === 'overall').length;
+  const noContact = S.participants.filter(p => !p.email || !p.phone).length;
+  const holes = n => S.participants.filter(p => p.hole_tickets === n).length;
   $('partCount').innerHTML = `${S.participants.length} registered` + (adults ? ` • ${adults} adult${adults === 1 ? '' : 's'} (Overall only)` : '')
-    + (noDiv ? ` • <button class="text-red-700 underline" onclick="$('partFilter').value='!';renderParticipants()">${noDiv} need an age</button>` : '');
+    + (holes(1) || holes(2) ? ` • ${holes(1)} one-hole / ${holes(2)} two-hole` : '')
+    + (noDiv ? ` • <button class="text-red-700 underline" onclick="$('partFilter').value='!';renderParticipants()">${noDiv} need an age</button>` : '')
+    + (noContact ? ` • <span class="text-amber-700">${noContact} missing email/phone</span>` : '');
   el.innerHTML = list.slice(0, 300).map(p => `
     <div class="flex justify-between items-center border rounded p-3 ${p._failed ? 'border-red-400' : ''}">
       <div>
         <div class="font-medium">${esc(p.display_name)} ${p._pending ? '<span class="text-xs text-amber-700">(not synced)</span>' : ''}</div>
-        <div class="text-sm text-slate-500">ID: ${esc(p.participant_code || 'pending')} • Age ${p.age ?? '—'} • ${divisionLabel(p)}</div>
+        <div class="text-sm text-slate-500">ID: ${esc(p.participant_code || 'pending')} • Age ${p.age ?? '—'} • ${divisionLabel(p)} • ${p.hole_tickets ? holesText(p) : '<span class="text-amber-700">ticket type not set</span>'}${!p.email || !p.phone ? ` • <span class="text-amber-700">⚠ missing ${[!p.email && 'email', !p.phone && 'phone'].filter(Boolean).join(' & ')}</span>` : ''}</div>
       </div>
       <div class="flex gap-2">
         <button onclick="openParticipantModal('${p.id}')" class="text-sm px-3 py-1 bg-slate-200 rounded">Edit</button>
@@ -1125,7 +1112,7 @@ function printParticipantCard(p) {
   const card = `<div class="print-card">
       <div class="font-bold text-sm">${esc(S.t?.name || 'Tournament')}</div>
       <div class="text-lg font-bold mt-1">${esc(p.display_name)}</div>
-      <div class="text-xs mb-2">${esc(p.age_group || '')}${p.age != null ? ' • Age ' + p.age : ''}</div>
+      <div class="text-xs mb-2">${esc(p.age_group || '')}${p.age != null ? (p.age_group ? ' • ' : '') + 'Age ' + p.age : ''}${p.hole_tickets ? ' • ' + holesText(p) : ''}</div>
       <svg class="bc"></svg>
       <div class="qr mx-auto my-1" style="width:80px"></div>
       <div class="font-mono text-xs mt-1">${esc(p.participant_code)}</div>
@@ -1165,52 +1152,28 @@ function lookupParticipant() {
   $('weighForm').classList.remove('hidden');
   $('pInfo').textContent = `${p.display_name} • ${divisionText(p)} • ${code}`;
   $('weighMsg').textContent = '';
-  populateSelects(); checkDuplicateSpecies();
+  populateSelects();
   $('scanNum').value = ''; $('weightLbs').focus();
 }
-// One fish per species: the angler's active ticket for that species (if any).
-function activeTicketFor(participantId, speciesId, exceptId) {
-  return S.catches.find(c => c.status === 'active' && c.participant_id === participantId && c.species_id === speciesId && c.id !== exceptId);
-}
 function speciesName(id) { return S.species.find(s => s.id === id)?.name || 'that species'; }
-function checkDuplicateSpecies() {
-  const p = S.currentParticipant, box = $('dupBox'); if (!box) return;
-  const old = p && activeTicketFor(p.id, $('species').value);
-  box.classList.toggle('hidden', !old);
-  if (!old) { box.innerHTML = ''; return; }
-  const w = round2(parseFloat($('weightLbs').value));
-  const bigger = w > 0 ? w > round2(old.weight_lbs) : null;
-  box.innerHTML = `<div class="font-semibold">Already has a ${esc(speciesName(old.species_id))}: ticket ${ticketLabel(old)} – ${formatLbs(old.weight_lbs)}</div>
-    <div class="text-sm mb-2">Only one fish per species counts. Replacing voids ${ticketLabel(old)}.${bigger === false ? ` <b>This fish is not bigger.</b>` : ''}</div>
-    <div class="flex flex-wrap gap-2">
-      <button type="button" id="dupReplace" onclick="submitWeighIn('${old.id}')" class="${bigger === false ? 'border border-amber-600 text-amber-900' : 'bg-amber-600 text-white'} px-3 py-2 rounded-lg font-semibold">Replace ${ticketLabel(old)} with this fish</button>
-      <button type="button" onclick="cancelWeighIn()" class="border px-3 py-2 rounded-lg">Keep ${ticketLabel(old)} – don't record</button>
-    </div>`;
-}
-function cancelWeighIn() {
-  $('weightLbs').value = ''; $('weighForm').classList.add('hidden'); S.currentParticipant = null;
-  msg('weighMsg', 'Not recorded.'); $('scanNum').focus();
-}
-function submitWeighIn(replaceId) {
+// Every weigh-in counts (an angler can weigh several fish, even of the same species); each leaderboard uses the
+// angler's best fish for that board.
+function submitWeighIn() {
   const p = S.currentParticipant; if (!p) return;
   const total = round2(parseFloat($('weightLbs').value));
   if (!(total > 0)) return msg('weighMsg', 'Enter a weight in pounds (e.g. 2.35)', false);
   if (total > 500) return msg('weighMsg', 'Weight must be 500 lbs or less', false);
   if (!$('species').value) return msg('weighMsg', 'No species set up for this tournament', false);
-  const old = activeTicketFor(p.id, $('species').value);
-  if (old && replaceId !== old.id) { checkDuplicateSpecies(); return msg('weighMsg', `${p.display_name} already has a ${speciesName(old.species_id)} (${ticketLabel(old)}). Replace it or keep it.`, false); }
   const row = {
     id: uuid(), tournament_id: S.tid, participant_id: p.id, species_id: $('species').value, weight_lbs: total,
-    station: $('stationName').value.trim() || null, weighed_at: new Date().toISOString(), source: 'station', status: 'active',
-    ...(old ? { replaces: old.id } : {})
+    station: $('stationName').value.trim() || null, weighed_at: new Date().toISOString(), source: 'station', status: 'active'
   };
-  if (old) { old.status = 'voided'; old.void_reason = 'Replaced by a new weigh-in'; } // the server voids it when this syncs
   enqueue({ kind: 'insert', table: 'catches', row: { ...row } });
   const local = S.catches.find(c => c.id === row.id); if (local) local.recorded_by = S.user?.id;
   printWeighTicket(p, row);
   $('weightLbs').value = '';
-  $('weighForm').classList.add('hidden'); S.currentParticipant = null; checkDuplicateSpecies();
-  msg('weighMsg', `Recorded ${formatLbs(total)} for ${p.display_name}${old ? ` – replaces ${ticketLabel(old)}` : ''}`);
+  $('weighForm').classList.add('hidden'); S.currentParticipant = null;
+  msg('weighMsg', `Recorded ${speciesName(row.species_id)} ${formatLbs(total)} for ${p.display_name}`);
   $('scanNum').focus();
 }
 // ---- Find / edit weigh tickets (weigh + admin). Edits go through the offline queue as absolute-value updates.
@@ -1234,20 +1197,19 @@ function renderRecentCatches() {
   const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
   const q = ($('tkSearch')?.value || '').trim(), showVoid = $('tkShowVoid')?.checked;
   const limit = S.tkLimit || 50;
-  renderHeldTickets(pById, sById);
   const all = S.catches.filter(c => (showVoid || c.status !== 'voided' || q) && ticketMatches(c, q, pById[c.participant_id], sById[c.species_id]))
     .sort((a, b) => (b.weighed_at || '').localeCompare(a.weighed_at || '') || (b.ticket_no || 1e9) - (a.ticket_no || 1e9));
   const list = all.slice(0, limit), edit = canEditTickets();
   $('tkCount').textContent = q ? `${all.length} match${all.length === 1 ? '' : 'es'}` : `${S.catches.length} ticket${S.catches.length === 1 ? '' : 's'} • newest first`;
   $('tkMore').classList.toggle('hidden', all.length <= limit);
   el.innerHTML = list.map(c => {
-    const p = pById[c.participant_id], v = c.status === 'voided', held = c.status === 'held';
+    const p = pById[c.participant_id], v = c.status === 'voided';
     const edited = c.updated_at && c.created_at && (new Date(c.updated_at) - new Date(c.created_at) > 2000);
     const inner = `<div class="flex justify-between items-start gap-2">
         <div class="min-w-0">
           <div class="font-medium truncate ${v ? 'line-through text-slate-400' : ''}">${esc(p?.display_name || '?')} <span class="text-xs text-slate-500 font-mono">${esc(p?.participant_code || '')}</span></div>
           <div class="text-xs text-slate-500">${ticketLabel(c)} • ${new Date(c.weighed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${esc(sById[c.species_id]?.name || '')}${c.station ? ' • ' + esc(c.station) : ''}
-            ${v ? '<span class="text-red-700">• voided</span>' : ''}${held ? '<span class="text-amber-700 font-medium">• held – duplicate species</span>' : ''}${edited && !v ? ' • <span class="text-blue-700">edited</span>' : ''}${c._pending ? ' • <span class="text-amber-700">not synced</span>' : ''}${c._failed ? ' • <span class="text-red-700">sync failed</span>' : ''}</div>
+            ${v ? '<span class="text-red-700">• voided</span>' : ''}${edited && !v ? ' • <span class="text-blue-700">edited</span>' : ''}${c._pending ? ' • <span class="text-amber-700">not synced</span>' : ''}${c._failed ? ' • <span class="text-red-700">sync failed</span>' : ''}</div>
           ${c.note ? `<div class="text-xs text-slate-600 italic truncate">${esc(c.note)}</div>` : ''}
         </div>
         <div class="font-bold whitespace-nowrap ${v ? 'line-through text-slate-400' : ''}">${formatLbs(c.weight_lbs)}</div>
@@ -1256,38 +1218,6 @@ function renderRecentCatches() {
       : `<div class="border-b py-2 px-1">${inner}</div>`;
   }).join('') || `<p class="text-slate-500 py-2">${q ? 'No tickets match.' : 'No weigh-ins yet.'}</p>`;
   if (S.ticketId && !$('ticketModal').classList.contains('hidden')) refreshTicketHeader();
-}
-// Tickets the server held back because the angler already had that species (e.g. weighed on two laptops while
-// one was offline). Staff choose which one counts.
-function renderHeldTickets(pById, sById) {
-  const el = $('heldTickets'); if (!el) return;
-  const held = S.catches.filter(c => c.status === 'held');
-  el.classList.toggle('hidden', !held.length);
-  if (!held.length) { el.innerHTML = ''; return; }
-  const edit = canEditTickets();
-  el.innerHTML = `<div class="font-semibold text-amber-900 mb-1">⚠ ${held.length} ticket${held.length === 1 ? '' : 's'} need${held.length === 1 ? 's' : ''} a decision – one fish per species</div>`
-    + held.map(c => {
-      const other = activeTicketFor(c.participant_id, c.species_id, c.id), p = pById[c.participant_id];
-      return `<div class="border-t border-amber-200 py-2">
-        <div>${esc(p?.display_name || '?')} – ${esc(sById[c.species_id]?.name || '')}: <b>${ticketLabel(c)} ${formatLbs(c.weight_lbs)}</b> (held)${other ? ` vs <b>${ticketLabel(other)} ${formatLbs(other.weight_lbs)}</b> (counts now)` : ''}</div>
-        ${edit ? `<div class="flex flex-wrap gap-2 mt-1">
-          <button type="button" onclick="countHeld('${c.id}')" class="bg-amber-600 text-white px-3 py-1 rounded">Count ${ticketLabel(c)}${other ? ` (void ${ticketLabel(other)})` : ''}</button>
-          ${other ? `<button type="button" onclick="dropHeld('${c.id}')" class="border border-amber-600 px-3 py-1 rounded">Keep ${ticketLabel(other)} (void ${ticketLabel(c)})</button>` : ''}
-        </div>` : ''}</div>`;
-    }).join('');
-}
-function countHeld(id) {
-  const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
-  const other = activeTicketFor(c.participant_id, c.species_id, c.id);
-  if (other) enqueue({ kind: 'update', table: 'catches', id: other.id, patch: { status: 'voided', void_reason: `Replaced by ${ticketLabel(c)}` } });
-  enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'active', void_reason: null } });
-  msg('weighMsg', `${ticketLabel(c)} now counts${other ? `; ${ticketLabel(other)} voided` : ''}.`);
-}
-function dropHeld(id) {
-  const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
-  const other = activeTicketFor(c.participant_id, c.species_id, c.id);
-  enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'voided', void_reason: `Duplicate species – kept ${other ? ticketLabel(other) : 'the other ticket'}` } });
-  msg('weighMsg', `${ticketLabel(c)} voided${other ? `; ${ticketLabel(other)} still counts` : ''}.`);
 }
 function openTicket(id) {
   const c = S.catches.find(x => x.id === id); if (!c || !canEditTickets()) return;
@@ -1302,15 +1232,13 @@ function openTicket(id) {
 }
 function refreshTicketHeader() {
   const c = S.catches.find(x => x.id === S.ticketId); if (!c) return closeTicket();
-  const v = c.status !== 'active', held = c.status === 'held';
+  const v = c.status !== 'active';
   $('tkTitle').textContent = `Ticket ${ticketLabel(c)}`;
   $('tkMeta').textContent = `Code ${ticketCode(c)} • weighed ${new Date(c.weighed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}${c.station ? ' at ' + c.station : ''}${c._pending ? ' • not synced yet' : ''}`;
   $('tkVoided').classList.toggle('hidden', !v);
-  $('tkVoided').textContent = held ? `Held${c.void_reason ? ': ' + c.void_reason : ''} It doesn't count until you choose it.`
-    : v ? `Voided${c.void_reason ? ': ' + c.void_reason : ''}. It doesn't count on any leaderboard.` : '';
-  $('tkVoided').className = `${v ? '' : 'hidden '}${held ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'} rounded p-2 text-sm mb-3`;
+  $('tkVoided').textContent = v ? `Voided${c.void_reason ? ': ' + c.void_reason : ''}. It doesn't count on any leaderboard.` : '';
+  $('tkVoided').className = `${v ? '' : 'hidden '}bg-red-50 text-red-800 rounded p-2 text-sm mb-3`;
   $('tkVoidBtn').classList.toggle('hidden', c.status === 'voided'); $('tkRestoreBtn').classList.toggle('hidden', !v);
-  $('tkRestoreBtn').textContent = held ? 'Count this ticket' : 'Restore ticket';
   if (v) showVoidConfirm(false);
 }
 function closeTicket() { S.ticketId = null; closeModal('ticketModal'); }
@@ -1326,8 +1254,6 @@ function saveTicket() {
   const patch = {};
   for (const [k, v] of Object.entries(want)) if (k === 'weight_lbs' ? round2(c[k]) !== v : (c[k] ?? null) !== v) patch[k] = v;
   if (!Object.keys(patch).length) return msg('tkMsg', 'Nothing changed.');
-  const clash = c.status === 'active' && (patch.participant_id || patch.species_id) && activeTicketFor(want.participant_id, want.species_id, c.id);
-  if (clash) return msg('tkMsg', `That angler already has a ${speciesName(want.species_id)} (${ticketLabel(clash)}). Only one fish per species – void ${ticketLabel(clash)} first.`, false);
   enqueue({ kind: 'update', table: 'catches', id: c.id, patch });
   msg('weighMsg', `Saved ticket ${ticketLabel(c)}${S.online ? '' : ' (will sync when back online)'}.`);
   closeTicket();
@@ -1340,12 +1266,9 @@ function voidTicket() {
 }
 function restoreTicket() {
   const c = S.catches.find(x => x.id === S.ticketId); if (!c) return;
-  const other = activeTicketFor(c.participant_id, c.species_id, c.id);
-  if (!confirm(other ? `${ticketLabel(other)} (${formatLbs(other.weight_lbs)}) counts for this angler's ${speciesName(c.species_id)} now. Void ${ticketLabel(other)} and count ${ticketLabel(c)} instead?`
-    : `${c.status === 'held' ? 'Count' : 'Restore'} ticket ${ticketLabel(c)}? It will count on the leaderboards.`)) return;
-  if (other) enqueue({ kind: 'update', table: 'catches', id: other.id, patch: { status: 'voided', void_reason: `Replaced by ${ticketLabel(c)}` } });
+  if (!confirm(`Restore ticket ${ticketLabel(c)}? It will count on the leaderboards.`)) return;
   enqueue({ kind: 'update', table: 'catches', id: c.id, patch: { status: 'active', void_reason: null } });
-  msg('weighMsg', `${ticketLabel(c)} counts again${other ? `; ${ticketLabel(other)} voided` : ''}.`); closeTicket();
+  msg('weighMsg', `${ticketLabel(c)} counts again.`); closeTicket();
 }
 function reprintTicket() {
   const c = S.catches.find(x => x.id === S.ticketId); const p = c && S.participants.find(x => x.id === c.participant_id);
@@ -1376,39 +1299,47 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('ticket
 
 // ---------------------------------------------------------------- leaderboards
 // Same logic as private.leaderboard() in the database, run locally for staff (instant + offline).
+// Fixed boards: Overall (everyone), Youth Divisions (a section per division), Species (a section per species).
+// Each angler counts with ONE fish per board: their biggest fish (any species) for Overall and Youth Divisions,
+// their biggest fish of that species for each Species section. Kids are in Overall AND their youth division.
+function bestFishRows(active, pById, sById, speciesId, group, topN) {
+  const best = {};
+  for (const c of active) {
+    if (speciesId && c.species_id !== speciesId) continue;
+    const b = best[c.participant_id], w = Number(c.weight_lbs);
+    if (!b || w > b.w || (w === b.w && ((c.weighed_at || '') < (b.c.weighed_at || '') || ((c.weighed_at || '') === (b.c.weighed_at || '') && (c.ticket_no || 1e9) < (b.c.ticket_no || 1e9)))))
+      best[c.participant_id] = { w, c };
+  }
+  const list = Object.values(best).map(b => ({ p: pById[b.c.participant_id], lbs: round2(b.w), species: sById[b.c.species_id]?.name || '' }))
+    .filter(x => x.p && (!group || x.p.age_group === group))
+    .sort((a, b) => b.lbs - a.lbs || a.p.display_name.localeCompare(b.p.display_name));
+  let rank = 0;
+  return (topN ? list.slice(0, topN) : list).map((x, i) => { if (i === 0 || x.lbs !== list[i - 1].lbs) rank = i + 1; return { rank, name: x.p.display_name, species: x.species, lbs: x.lbs }; });
+}
 function computeBoards() {
   if (!S.t) return null;
   const active = S.catches.filter(c => c.status === 'active');
-  const pById = Object.fromEntries(S.participants.map(p => [p.id, p]));
-  const rowsFor = (scoring, speciesId, ageGroup, topN) => {
-    const agg = {};
-    for (const c of active) {
-      if (speciesId && c.species_id !== speciesId) continue;
-      const a = agg[c.participant_id] || (agg[c.participant_id] = { fish: 0, sum: 0, max: 0 });
-      const w = Number(c.weight_lbs); a.fish++; a.sum += w; a.max = Math.max(a.max, w);
-    }
-    const list = Object.entries(agg).map(([pid, a]) => ({ p: pById[pid], fish: a.fish, lbs: round2(scoring === 'biggest_fish' ? a.max : a.sum) }))
-      .filter(x => x.p && (!ageGroup || x.p.age_group === ageGroup))
-      .sort((a, b) => b.lbs - a.lbs || a.p.display_name.localeCompare(b.p.display_name));
-    let rank = 0;
-    return (topN ? list.slice(0, topN) : list).map((x, i) => { if (i === 0 || x.lbs !== list[i - 1].lbs) rank = i + 1; return { rank, name: x.p.display_name, group: x.p.age_group, fish: x.fish, lbs: x.lbs }; });
-  };
-  const boards = [];
-  for (const c of S.configs.filter(c => c.enabled).sort((a, b) => a.sort_order - b.sort_order)) {
-    const mode = c.split_mode || 'tabs';
-    if (c.board_type === 'species' && !c.species_id && mode === 'tabs') S.species.forEach(s => boards.push({ title: `${c.title} – ${s.name}`, scoring: c.scoring, rows: rowsFor(c.scoring, s.id, null, c.top_n) }));
-    else if (c.board_type === 'species' && !c.species_id && mode === 'grouped') boards.push({ title: c.title, scoring: c.scoring, rows: [], groups: S.species.map(s => ({ name: s.name, rows: rowsFor(c.scoring, s.id, null, c.top_n) })) });
-    else if (c.board_type === 'age_group' && !c.age_group && mode === 'tabs') (S.t.age_groups || []).forEach(g => boards.push({ title: `${c.title} – ${g}`, scoring: c.scoring, rows: rowsFor(c.scoring, null, g, c.top_n) }));
-    else if (c.board_type === 'age_group' && !c.age_group && mode === 'grouped') boards.push({ title: c.title, scoring: c.scoring, rows: [], groups: (S.t.age_groups || []).map(g => ({ name: g, rows: rowsFor(c.scoring, null, g, c.top_n) })) });
-    else boards.push({ title: c.title, scoring: c.scoring, rows: rowsFor(c.scoring, c.species_id, c.age_group, c.top_n) });
-  }
-  return { tournament: { id: S.t.id, name: S.t.name, year: S.t.year, status: S.t.status }, boards, local: true };
+  const pById = Object.fromEntries(S.participants.map(p => [p.id, p])), sById = Object.fromEntries(S.species.map(s => [s.id, s]));
+  const boards = [
+    { key: 'overall', title: 'Overall', rows: bestFishRows(active, pById, sById, null, null) },
+    { key: 'youth', title: 'Youth Divisions', rows: [], groups: (S.t.age_groups || []).map(g => ({ name: g, rows: bestFishRows(active, pById, sById, null, g) })) },
+    { key: 'species', title: 'Species', rows: [], groups: S.species.map(s => ({ name: s.name, rows: bestFishRows(active, pById, sById, s.id, null) })) }
+  ];
+  const t = S.t;
+  return { tournament: { id: t.id, name: t.name, year: t.year, status: t.status, header_image_url: t.header_image_url,
+    screen: { scroll_speed: t.screen_scroll_speed, pause_seconds: t.screen_pause_seconds } }, boards, local: true };
 }
+const BOARD_NOTE = {
+  overall: "Everyone – each angler's single biggest fish (any species).",
+  youth: "Each angler's single biggest fish (any species). Kids also appear in Overall.",
+  species: "Each angler's biggest fish of that species."
+};
 // A board is either plain ({rows}) or grouped ({groups:[{name, rows}]}) – one section per species / age group.
 function boardSections(b) { return b.groups ? b.groups : [{ name: null, rows: b.rows || [] }]; }
 function boardHasData(b) { return boardSections(b).some(s => s.rows.length); }
+// Each row: rank, name, then the counted fish's species and weight (e.g. "Walleye 4.00 lbs").
 function rowsHtml(rows, compact) {
-  return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)} <span class="text-slate-400 text-sm">${esc(r.group || '')}</span></span><span class="font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('')
+  return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold">${r.rank}.</span> ${esc(r.name)}</span><span class="whitespace-nowrap"><span class="text-slate-600">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
     || `<div class="text-sm text-slate-500 ${compact ? 'px-2 py-1' : ''}">No fish yet</div>`;
 }
 // Collapsed group sections on grouped boards, remembered per tournament + board on this device.
@@ -1450,14 +1381,14 @@ function renderLeaderboard() {
   if (data.error) { $('boardContent').innerHTML = '<p class="text-slate-500">This leaderboard isn\'t available – the tournament may have been deleted or hidden from the public.</p>'; return; }
   const boards = data.boards || [];
   if (!boards.length) { $('boardTabs').innerHTML = ''; $('boardContent').innerHTML = '<p class="text-slate-500">No leaderboards configured.</p>'; return; }
-  const slugs = []; boards.forEach((b, i) => { let k = slug(b.title) || 'board'; if (slugs.includes(k)) k += '-' + i; slugs.push(k); });
+  const slugs = []; boards.forEach((b, i) => { let k = b.key || slug(b.title) || 'board'; if (slugs.includes(k)) k += '-' + i; slugs.push(k); });
   let idx = slugs.indexOf(currentBoardSlug());
   if (idx < 0) idx = 0;
   $('boardTabs').innerHTML = boards.map((b, i) => `<button role="tab" aria-selected="${i === idx}" onclick="selectBoard('${slugs[i]}')"
       class="px-3 py-2 rounded-full text-sm ${i === idx ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">${esc(b.title)}</button>`).join('');
   const b = boards[idx];
   $('boardContent').innerHTML = `
-    <div class="text-xs text-slate-500 mb-2">${b.scoring === 'biggest_fish' ? 'Biggest single fish' : 'Total weight'}</div>
+    <div class="text-xs text-slate-500 mb-2">${esc(BOARD_NOTE[b.key] || '')}${b.rows.length && !b.groups ? ` • ${b.rows.length} angler${b.rows.length === 1 ? '' : 's'}` : ''}</div>
     ${b.groups ? b.groups.map(g => {
       const key = groupKey(slugs[idx], g.name), shut = !openGroups()[key];
       return `<section class="mb-3">
@@ -1488,7 +1419,7 @@ async function pollBoard() {
       if (!r.error && !(r.data || []).some(x => x.id === tid)) return forgetTournament(tid, false);
     }
   }
-  if (!data.unchanged) { S.board.data = data; S.board.version = data.v ?? null; }
+  if (!data.unchanged) { S.board.data = data; S.board.version = data.v ?? null; updateHeaderImage(); }
   if (S.tab === 'leaderboard') renderLeaderboard();
   if (S.tab === 'display') renderDisplay();
 }
@@ -1508,49 +1439,62 @@ function restartPolling() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) restartPolling(); });
 
+// ---- Big screen: top 10 Overall, top 5 per youth division, top 3 per species on one page that scrolls
+// (pause at the top, scroll down, pause at the bottom, fade back to the top). Speed / pause are set in Setup.
+const TV_TOP = { overall: 10, youth: 5, species: 3 };
+const TV = { raf: null, y: 0, phase: 'top', until: 0, last: 0, html: '' };
 function startDisplay() {
-  clearInterval(S.displayTimer);
-  S.displayIdx = 0; renderDisplay();
-  S.displayTimer = setInterval(() => { S.displayIdx++; renderDisplay(); }, CFG.boardRotateSeconds * 1000);
+  TV.y = 0; TV.phase = 'top'; TV.until = 0; TV.last = 0; TV.html = '';
+  renderDisplay();
+  if (!TV.raf) TV.raf = requestAnimationFrame(tvTick);
 }
-const TV_LINES = 11; // rows per TV slide (section headers count as a line)
-function displaySlides(data) {
-  const boards = (data?.boards || []);
-  const withData = boards.filter(boardHasData);
-  const slides = [];
-  for (const b of (withData.length ? withData : boards)) {
-    if (!b.groups) { slides.push({ title: b.title, sections: [{ name: null, rows: b.rows }] }); continue; }
-    // Grouped board: keep sections whole where possible, split long ones across pages.
-    const pages = []; let cur = [], lines = 0;
-    for (const g of b.groups.filter(g => g.rows.length).length ? b.groups.filter(g => g.rows.length) : b.groups) {
-      let rows = g.rows.length ? g.rows : [];
-      do {
-        const room = TV_LINES - lines - 1;
-        if (room < 2 && cur.length) { pages.push(cur); cur = []; lines = 0; continue; }
-        const part = rows.slice(0, Math.max(room, 1));
-        cur.push({ name: g.name + (rows !== g.rows ? ' (cont.)' : ''), rows: part, empty: !g.rows.length });
-        lines += 1 + Math.max(part.length, 1);
-        rows = rows.slice(part.length);
-      } while (rows.length);
-    }
-    if (cur.length) pages.push(cur);
-    pages.forEach((p, i) => slides.push({ title: b.title + (pages.length > 1 ? ` (${i + 1}/${pages.length})` : ''), sections: p }));
-  }
-  return slides;
+function stopDisplay() { if (TV.raf) cancelAnimationFrame(TV.raf); TV.raf = null; }
+function tvSettings() {
+  const t = S.board.data?.tournament?.screen || {};
+  const speed = Number(t.scroll_speed ?? S.t?.screen_scroll_speed ?? 40), pause = Number(t.pause_seconds ?? S.t?.screen_pause_seconds ?? 5);
+  return { speed: speed > 0 ? speed : 40, pause: pause >= 0 ? pause : 5 };
+}
+function tvTick(now) {
+  TV.raf = requestAnimationFrame(tvTick);
+  const vp = $('displayViewport'), inner = $('displayBoard'); if (!vp || !inner || S.tab !== 'display') return;
+  const dt = TV.last ? Math.min(0.25, (now - TV.last) / 1000) : 0; TV.last = now;
+  const { speed, pause } = tvSettings(), max = Math.max(0, inner.scrollHeight - vp.clientHeight);
+  if (!TV.until) TV.until = now + pause * 1000;
+  if (max <= 1) { TV.y = 0; TV.phase = 'top'; TV.until = now + pause * 1000; }
+  else if (TV.phase === 'top' && now >= TV.until) TV.phase = 'scroll';
+  else if (TV.phase === 'scroll') { TV.y = Math.min(max, TV.y + speed * dt); if (TV.y >= max) { TV.phase = 'bottom'; TV.until = now + pause * 1000; } }
+  else if (TV.phase === 'bottom' && now >= TV.until) { TV.phase = 'fade'; TV.until = now + 450; inner.classList.add('tv-fade'); }
+  else if (TV.phase === 'fade' && now >= TV.until) { TV.y = 0; TV.phase = 'top'; TV.until = now + pause * 1000; inner.classList.remove('tv-fade'); }
+  if (TV.y > max) TV.y = max;
+  inner.style.transform = `translateY(${-Math.round(TV.y)}px)`;
+}
+function tvRows(rows, n, big) {
+  return rows.slice(0, n).map(r => `<div class="flex justify-between gap-4 border-b border-slate-700 ${big ? 'py-2' : 'py-1 text-2xl'}">
+      <span class="min-w-0 truncate">${r.rank}. ${esc(r.name)}</span>
+      <span class="whitespace-nowrap"><span class="text-slate-300">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
+    || `<p class="text-slate-500 text-xl py-1">No fish yet</p>`;
+}
+function tvHtml(data) {
+  const boards = data?.boards || [], by = k => boards.find(b => b.key === k);
+  const head = t => `<div class="text-3xl md:text-4xl font-bold uppercase tracking-wider text-sky-300 border-b-2 border-sky-700 pb-1 mb-2">${esc(t)}</div>`;
+  const sub = n => `<div class="text-2xl font-semibold uppercase tracking-wide text-sky-200 mt-3 mb-1">${esc(n)}</div>`;
+  const overall = by('overall'), youth = by('youth'), species = by('species');
+  let h = '';
+  if (overall) h += `<section class="mb-10">${head('Overall – Top ' + TV_TOP.overall)}${tvRows(overall.rows, TV_TOP.overall, true)}</section>`;
+  if (youth?.groups?.length) h += `<section class="mb-10">${head('Youth Divisions – Top ' + TV_TOP.youth)}<div class="grid grid-cols-1 xl:grid-cols-2 gap-x-10">${youth.groups.map(g => `<div>${sub(g.name)}${tvRows(g.rows, TV_TOP.youth)}</div>`).join('')}</div></section>`;
+  if (species?.groups?.length) h += `<section class="mb-10">${head('Species – Top ' + TV_TOP.species)}<div class="grid grid-cols-1 xl:grid-cols-2 gap-x-10">${species.groups.map(g => `<div>${sub(g.name)}${tvRows(g.rows, TV_TOP.species)}</div>`).join('')}</div></section>`;
+  return h;
 }
 function renderDisplay() {
   const data = S.board.data; // the TV always uses the polled RPC
   $('displayTournament').textContent = data?.tournament ? `${data.tournament.name} (${data.tournament.year})` : '';
-  const slides = displaySlides(data);
-  if (!slides.length) { $('displayTitle').textContent = 'LIVE LEADERBOARD'; $('displayBoard').innerHTML = `<p class="text-center text-slate-400">${data?.error ? 'This leaderboard isn\'t available.' : data ? 'No weigh-ins yet.' : 'Loading…'}</p>`; return; }
-  const sl = slides[S.displayIdx % slides.length];
-  const grouped = sl.sections.some(x => x.name);
-  $('displayTitle').textContent = sl.title.toUpperCase();
-  $('displayBoard').innerHTML = sl.sections.map(sec => `
-    ${sec.name ? `<div class="text-xl font-semibold uppercase tracking-wider text-sky-300 mt-4 border-b border-sky-800 pb-1">${esc(sec.name)}</div>` : ''}
-    ${sec.rows.map(r => `<div class="flex justify-between border-b border-slate-700 ${grouped ? 'py-1 text-2xl' : 'py-2'}"><span>${r.rank}. ${esc(r.name)} <span class="text-slate-400 text-xl">${esc(r.group || '')}</span></span><span class="font-bold">${formatLbs(r.lbs)}</span></div>`).join('')
-      || `<p class="text-slate-500 text-xl py-1">No fish yet</p>`}`).join('');
+  $('displayTitle').textContent = 'LIVE LEADERBOARD';
+  const html = !data || data.error || !(data.boards || []).length
+    ? `<p class="text-center text-slate-400">${data?.error ? 'This leaderboard isn\'t available.' : data ? 'No leaderboards yet.' : 'Loading…'}</p>`
+    : tvHtml(data);
+  if (html !== TV.html) { TV.html = html; $('displayBoard').innerHTML = html; } // keep the scroll position across refreshes
   $('displayUpdated').textContent = S.board.at ? 'Updated ' + S.board.at.toLocaleTimeString() : '';
+  if (S.tab === 'display' && !TV.raf) TV.raf = requestAnimationFrame(tvTick);
 }
 
 // ---------------------------------------------------------------- startup

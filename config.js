@@ -5,6 +5,5 @@ window.IFT_CONFIG = {
   supabaseUrl: 'https://cqnqqjaoeqsdakrdijzr.supabase.co',
   supabaseKey: 'sb_publishable_CvNc1ZLOejETdhht2xNGMw_bk-KalXT',
   publicPollSeconds: 45,   // public leaderboard viewers
-  screenPollSeconds: 15,   // big screen TV
-  boardRotateSeconds: 8
+  screenPollSeconds: 15    // big screen TV (scroll speed / pause are set per tournament in Setup)
 };

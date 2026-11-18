@@ -22,7 +22,7 @@ Several gate laptops, weigh stations, an admin laptop and a big-screen TV share 
 | `gate` | Register walk-ups, import participants, find people and print badge cards |
 | `weigh` | Record weigh-ins and void their own mistakes |
 | `screen` | Read-only staff view (big screen / leaderboard) |
-| public (not signed in) | Leaderboard only: names, Age/Division, placements, weights (lbs). No emails, phones or ages. |
+| public (not signed in) | Leaderboard only: names, placements, species and weight (lbs) of each counted fish. No emails, phones, ages or ticket types. |
 
 A signed-in account with no role in `staff_roles` can see nothing.
 
@@ -45,11 +45,10 @@ Things to know:
 - Reserved but unused badge numbers leave gaps in the numbering. That's harmless.
 
 **Public leaderboard link (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&view=leaderboard`.
-It opens a leaderboard-only page (tournament name, last-updated time, the board tabs) with no staff tabs, mode picker,
-tournament picker or sign-in button – even on a signed-in staff laptop. Each leaderboard (overall, big fish, each species,
-each Age/Division…) is its own tab; the tab row scrolls sideways on small screens and the selected tab is kept in the link
-(`…&view=leaderboard#board=big-fish`), so people can share a specific board. The page refreshes every 45 s.
-Older links (`?t=<id>` on its own, or with only `#board=…`) open the same page.
+It opens a leaderboard-only page (tournament name, last-updated time, three buttons: **Overall**, **Youth Divisions**,
+**Species**) with no staff tabs, mode picker, tournament picker or sign-in button – even on a signed-in staff laptop.
+The selected button is kept in the link (`…&view=leaderboard#board=species`) so people can share it. The page
+refreshes every 45 s. Older links (`?t=<id>` on its own, or with only `#board=…`) open the same page.
 
 **Big screen URL (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&screen=1`.
 
@@ -96,26 +95,42 @@ Once you're an admin you can also add roles from the Table Editor (`staff_roles`
 To remove someone completely, delete their user in Authentication → Users (their roles go with it).
 
 4. **Set the admin PIN** (see "Admin PIN" below) – without it nobody can switch into Admin mode.
-5. **Sign in on the site** with "Staff sign in", switch the mode picker to **Admin** (enter the PIN), go to **Setup**, create the tournament (name, year, Age/Division
-   names with their age ranges, species), and adjust the leaderboards. New tournaments start with the organizer's setup:
-   Age/Divisions **12 & Under** (max 12) and **13-17** (13–17), and three boards:
-   - **Overall** – everybody, ranked by **total weight** (each angler's fish added up; with one fish per species
-     that's their best of each species). Change its **Metric** to **Biggest single fish** if the organizer
-     ranks Overall by the heaviest fish instead.
-   - **Species** – one board, a section per species (each angler's one fish of that species).
-   - **Age** – one board, a section per Age/Division (12 & Under, 13-17). Adults are only on Overall.
+5. **Sign in on the site** with "Staff sign in", switch the mode picker to **Admin** (enter the PIN), go to **Setup**,
+   create the tournament (name, year, event date, species, youth divisions) and set the big-screen scrolling.
+   New tournaments start with the organizer's youth divisions **Teenage 13 to 17** (13–17) and **Kids 12 & Under**
+   (max 12). There is no senior division.
 
-   Species and Age/Division boards have the same picker choices:
-   - **Each species / Age/Division** – a separate tab (and TV slide) per species or group.
-   - **All species / Age/Divisions, grouped on one board** – ONE tab (one TV slide, split into pages on the TV
-     if it's long) with a separately ranked section per species or group (Walleye, Perch, …).
-   - **Any species / Age/Division, combined ranking** – one tab, everyone ranked together.
-   - Or pick a single species / group.
-   - **Top**: how many places to show (3–100), or **All** to list everyone with a fish. On the public page and the
-     staff Leaderboard tab, grouped sections **start folded** – tap a heading to open it (remembered on that device
-     per board); the Big Screen always shows every section and pages through long lists (11 lines per page).
-     "All" makes the public page download a bit more (one line per angler) – it only re-downloads when the data
-     changes, so the extra is small even with a few hundred anglers.
+## Leaderboards (organizer rules, Nov 2026)
+
+- **Every weigh-in counts** – an angler can weigh as many fish as they like, including several of the same species.
+- **One fish per angler per board.** Each board uses the angler's best fish for that board:
+  - **Overall** – everybody, ranked by their **single biggest fish of any species**.
+  - **Youth Divisions** – a section each for **Teenage 13 to 17** and **Kids 12 & Under**, ranked by each kid's single
+    biggest fish. Kids are on Overall **and** their youth division (an 11-year-old with a 3 lb bass can be 4th Overall
+    and 1st in Kids 12 & Under).
+  - **Species** – a section per species, ranked by each angler's biggest fish **of that species**.
+  - Example: Bob weighs crappie 2, bass 3, bass 3.5, walleye 4 → Overall shows his 4.00 lb walleye; Bass shows his
+    3.50 lb bass; Crappie shows his 2.00 lb crappie.
+- Each row shows rank, name, then the species and weight of the counted fish (e.g. `Walleye 4.00 lbs`). No division text.
+- Ties share a rank (listed by name). Voided tickets don't count.
+- The **Leaderboard** page lists **everyone** on each board. Youth Divisions and Species sections **start folded** –
+  tap a heading to open it (remembered on that device).
+- The **Big Screen** shows the **top 10 Overall, top 5 in each youth division and top 3 in each species** on one page
+  that scrolls: it pauses at the top, scrolls down, pauses at the bottom, then fades back to the top. Admins set
+  **Scroll speed** (pixels per second; slow ≈ 20, normal ≈ 40, fast ≈ 80) and **Pause** (seconds) in
+  Setup → **Big screen & header**. The TV picks up changes within about 15 s. If everything fits on the screen it
+  doesn't scroll.
+- The boards are fixed (the old configurable boards and the Total weight / Biggest fish "Metric" are gone; the
+  `leaderboard_configs` table is no longer used).
+
+## Header graphic
+
+The text title "Ice Fishing Tracker" is replaced by a header graphic when one is available:
+- Put the image in the repo as **`assets/header.png`** (used by every tournament), or
+- set **Header image URL** in Setup → Big screen & header for one tournament (`https://…` or `assets/…`).
+If neither loads, the text title is shown. Suggested size: **2400 × 300 px** (8:1, wide banner), PNG or JPG,
+under ~500 KB, with the important content away from the left/right edges. It's shown full-width at the top of the
+staff app and the public leaderboard, and above the big-screen leaderboard (up to 18% of the screen height).
 
 ## Admin PIN
 
@@ -147,26 +162,36 @@ It takes effect immediately on every laptop. Clear the cell (NULL) to block Admi
 - Set the tournament's status to **Active** so it's the default on the public page.
 - Badge cards and weigh tickets print through the browser print dialog; pick the Brother QL-800 with 62 mm labels.
 
-## Ages and Age/Division
+## Ages and youth divisions
 
-- Each participant has an **age** (whole years), entered on walk-up/edit or imported from CSV, and an optional
-  **birth date**. When a birth date is stored, the age is calculated as of the tournament's **event date**
-  (today if no event date is set) and recalculated automatically if the event date changes.
-- In **Setup**, each Age/Division has a **Min** and **Max** age. Leave one blank for open-ended
-  (Max 13 = "13 & under", Min 19 = "19 and up"). If ranges overlap, the first one listed wins.
-- The database assigns the Age/Division automatically on every add, import and age edit, and re-assigns
-  everyone when the ranges change, so all laptops (and changes that sync later from offline laptops) agree.
-- **Set by hand:** in the participant's Edit window, pick a specific Age/Division instead of "automatic".
-  It's shown with a "set by hand" tag and won't be changed by the ranges. Choose "automatic" to undo.
-- **Everybody is in Overall.** Anyone older than the oldest range (18+ with 12 & Under / 13-17) has no
-  Age/Division and shows as **"Overall only (adult)"** – that's normal, not an error.
-- A participant with **no age** (or an age no range covers, e.g. a gap between ranges) is flagged in red on the
-  Participants tab ("need an age" link filters to them). They're on Overall but not on the Age board until fixed.
-- An imported Age/Division name that isn't one of the tournament's (e.g. an old "Adult" or "14-18") is ignored.
+- **Overall is automatic – everybody is in it.** It's not an age division, so don't add an "Overall" row in Setup
+  (the app and the database refuse it). Youth divisions are only for kids.
+- Each participant has an **age** (whole years) – required on the walk-up form – and an optional **birth date**.
+  When a birth date is stored, the age is calculated as of the tournament's **event date** (today if no event date
+  is set) and recalculated automatically if the event date changes.
+- In **Setup**, each youth division has a **Min** and **Max** age. Leave Min blank for "and under" (Max 12 =
+  "12 & Under"). If two youth divisions overlap, there's a warning and the first one listed wins.
+- **Divisions are always automatic** from age / birth date. There's no division choice on sign-up. The database
+  assigns it on every add, import and age edit, and re-assigns everyone when the ranges change.
+- Adults (older than the oldest youth division) show as **"Overall"** – that's normal.
+- A participant with **no age** is flagged in red on the Participants tab ("need an age" link filters to them).
+  They're on Overall but can't be placed in a youth division until an age is added.
+
+## Sign-up (walk-up form)
+
+Required: **full name**, **age** (or birth date), **email**, **phone**, and **One hole ticket / Two hole ticket**.
+The form won't save until they're filled in (email and phone are checked for a sensible format). The ticket type is
+stored on the participant (`hole_tickets` = 1 or 2), shown in the participant list and on the badge card, and
+included in the participants export. The Participants tab counts one-hole / two-hole tickets and flags anyone
+(e.g. imported) missing an email or phone.
 
 ## CSV formats
 
-- **Participants (Setup → Import → Preview → Import):** `name` + optional `age` and/or birth date, `Age/Division`, `email`, `phone`.
+- **Participants (Setup → Import → Preview → Import):** `name`, `email`, `phone`, `age` and/or birth date, optional
+  `hole_tickets` (`1`/`2`, `one`/`two`, `1 hole`/`2 holes`; also read from `holes` or `ticket`).
+  - Rows missing an email or phone (or with one that doesn't look right) are flagged in the preview; they still import,
+    and the Participants tab flags them so the gate can fill them in.
+  - A division / group column is **ignored** – divisions are always worked out from age.
   - Participant numbers are **always assigned automatically**. An `id`/`code`/`participant_id` column in the file is
     ignored, and the preview says so.
   - Birth date headers (any case): `birthdate`, `birth_date`, `dob`, `date_of_birth`, `birthday`.
@@ -176,9 +201,9 @@ It takes effect immediately on every laptop. Clear the cell (NULL) to block Admi
     blank. The preview flags any disagreement, and in that case the birth date is not saved (the database would
     otherwise recalculate the age from it). A date that can't be read is flagged and ignored.
   - Nothing is saved until you click **Import** under the preview.
-  With an age, the Age/Division is assigned automatically from the ranges (the file's Age/Division is ignored).
-  Without an age, the file's Age/Division (if any) is kept as a hand-set choice. Re-importing the same file skips rows already imported.
-- **Exports (Setup):** participants (including `age`, `birth_date`, `Age/Division`, `division_set_by_hand`), weigh-ins, leaderboard.
+  Re-importing the same file skips rows already imported.
+- **Exports (Setup):** participants (including `age`, `birth_date`, `youth_division`, `hole_tickets`, `email`, `phone`),
+  weigh-ins, leaderboard (`board, section, rank, name, species, lbs`).
 
 Weights are a single decimal-pounds value (`catches.weight_lbs`, 2 decimals, must be > 0 and ≤ 500).
 There is no angler check-in step, no fish length and no staff initials. Each weigh-in automatically records the
@@ -192,15 +217,8 @@ ticket (e.g. `CD0E7848`). Tap a ticket to change the angler, species, weight or 
 it (a reason is required; voided tickets are struck through, drop off every leaderboard, and can be **Restored**).
 Edits work offline like weigh-ins and sync later; leaderboards update on their own.
 
-- **One fish per species per angler.** When the angler already has a counting ticket for the species, the weigh
-  screen shows it (e.g. "Already has a Walleye: ticket #3 – 2.10 lbs") and won't record on Enter. Choose
-  **Replace #3 with this fish** (the server voids #3 with "Replaced by #N") or **Keep #3 – don't record**. It says
-  when the new fish is not bigger. Editing a ticket into a second fish of the same species, or restoring a voided one
-  while another counts, is refused (restore offers to void the other one instead).
-- **Offline duplicates are never lost.** If two laptops (one offline) weigh the same angler + species, the one that
-  syncs second is saved as **held** – it doesn't count. A yellow "needs a decision" box at the top of Find / edit
-  tickets lists it next to the one that counts, with **Count #N (void #M)** / **Keep #M (void #N)**.
-  The database enforces the rule too (only one counting ticket per tournament + angler + species).
+- **Every weigh-in counts** – there's no "already has a walleye" prompt and no held tickets. Boards pick each
+  angler's best fish automatically, so weighing a bigger fish of the same species simply moves them up.
 - Ticket numbers (#1, #2, …) are per tournament and assigned by the server when the weigh-in syncs (a ticket weighed
   offline shows `#…` until then; its printed code always works for searching).
 - Weigh staff can edit any ticket in the tournament; Gate can't. The database enforces this.
@@ -210,7 +228,7 @@ Edits work offline like weigh-ins and sync later; leaderboards update on their o
 ## Deleting a tournament
 
 Setup → **Danger zone – Delete tournament** (admins only, bottom of the page). The pop-up shows what will be deleted
-(participants, weigh-ins, species, leaderboards) and the Delete button stays disabled until you type the tournament
+(participants, weigh-ins, species) and the Delete button stays disabled until you type the tournament
 name exactly (capital letters matter; spaces at the ends are ignored). The database re-checks the admin role and the
 name and deletes everything in one transaction (`delete_tournament`). This can't be undone, so export the CSVs first.
 Afterwards this laptop switches to another tournament and forgets the deleted one (cache, reserved numbers, unsynced
@@ -218,11 +236,11 @@ changes). Other staff laptops switch away automatically; public links for it sho
 
 ## Sample file
 
-`samples/test-anglers.csv` – 40 fake anglers mixing age only, birth date only (mixed formats), both
-(some disagreeing), neither, and bad dates, including the 12/13 and 17/18 boundaries for a 2027-01-23 event, plus
-adults (Overall only) and an old "Adult" division name (ignored).
-Import it into a separate **test tournament**, not a real one. Two rows have ids (2027_00101/00102) to show that ids in
-a file are ignored – every row gets the next automatic number.
+`samples/test-anglers.csv` – 40 fake anglers (columns `name, age, birth_date, email, phone, hole_tickets`) mixing age
+only, birth date only (mixed formats), both, and neither; kids in both youth divisions plus adults (Overall only);
+hole tickets written as `1`, `2`, `one`, `two`, `1 hole`, `2 holes` (and two left blank); two rows missing an email
+and one missing a phone so the preview shows those warnings.
+Import it into a separate **test tournament**, not a real one.
 
 ## Backups
 
