@@ -161,7 +161,8 @@ It takes effect immediately on every laptop. Clear the cell (NULL) to block Admi
   and un-pause it in the dashboard if needed. (Or upgrade to Pro for that month.)
 - Sign in on every station while you have a good connection so the participant list and badge numbers are cached.
 - Set the tournament's status to **Active** so it's the default on the public page.
-- Badge cards and weigh tickets print through the browser print dialog; pick the Brother QL-800 with 62 mm labels.
+- Badge cards print through the browser print dialog; pick the Brother QL-800 with 62 mm labels. Weigh tickets
+  print automatically on Submit (see [Weigh tickets and auto-print](#weigh-tickets-and-auto-print-brother-ql-800)).
 
 ## Ages and youth divisions
 
@@ -225,6 +226,54 @@ Edits work offline like weigh-ins and sync later; leaderboards update on their o
 - Any staff account (Normal or Admin) can edit any ticket in the tournament. The database enforces this.
 - Every edit, void and restore is logged with who (email) and when, showing old → new values (the ticket's
   "Change history"). The weigh-in CSV export includes ticket number, code, note and last-changed time.
+
+## Weigh tickets and auto-print (Brother QL-800)
+
+When the worker enters the weight and hits **Submit & Print Ticket** (or Enter), the weigh-in is saved and the
+ticket prints right away, both online and offline (it's queued and syncs later). There's no preview window; the cursor goes
+back to the participant-number box for the next angler.
+
+- **Auto-print tickets** (checkbox on the Weigh-in screen) is **on** by default and saved per laptop. Turn it
+  off on a laptop with no printer.
+- **🖨 Reprint last ticket** reprints the last ticket from this laptop. Any older ticket: **Find / edit tickets**
+  → open it → **Reprint**. Reprints are marked "REPRINT".
+- **The ticket shows:** the Ice Fish Fest logo (black and white), the tournament name, "WEIGH TICKET", the ticket # and
+  8-character ticket code, the angler's name (large) and badge number (plus youth division if any), the species,
+  the weight (largest), the date and time, the station, and who weighed it (the staff display name).
+  Offline the ticket # isn't known yet, so it prints the ticket code (search it later in Find / edit tickets).
+  Voided tickets reprint with "VOIDED – does not count".
+- **Size:** 62mm wide x 85mm (2mm margins), black only. It's made for the Brother QL-800 with **62mm continuous
+  tape (DK-22205)**. A 62x100 die-cut label (DK-11202) also fits. On a letter printer it prints small in the
+  top-left corner, which works as a fallback.
+
+### One-time setup on the weigh-in laptop (Windows)
+
+1. **Install the Brother QL-800 driver** from Brother's support site (support.brother.com → QL-800 → Downloads →
+   "Full Driver & Software Package"). Plug the printer in by USB, power it on, and load the DK-22205 62mm roll.
+   Make sure the **Editor Lite** light is **off** (press the button until it goes out), or Windows won't see it as a printer.
+2. **Set the paper:** Windows Settings → Bluetooth & devices → Printers & scanners → **Brother QL-800** → Printing
+   preferences → Paper size **62mm** (continuous / "62mm x 100mm" for die-cut), Orientation Portrait → OK.
+   (Printer properties → Advanced → Printing Defaults has the same setting; set it there too.)
+3. **Make it the default printer:** same page → **Set as default**, and turn off "Let Windows manage my default printer".
+4. **Set up Chrome's print dialog once:** open the tracker, record a test fish (or use Reprint), and in the print dialog
+   pick **Brother QL-800**, **More settings → Margins: None**, untick **Headers and footers**, Scale **Default**,
+   then Print. Chrome remembers these for the site.
+5. **Silent printing (no dialog):** browsers always show the print dialog unless they're started with
+   `--kiosk-printing`. Make a desktop shortcut for the weigh station:
+   - Right-click the desktop → New → Shortcut → Target (Chrome):
+     `"C:\Program Files\Google\Chrome\Application\chrome.exe" --kiosk-printing --user-data-dir="C:\IceFishWeigh" https://twinrig.github.io/ice-fishing-tracker/?tab=weighin`
+   - Edge works the same way:
+     `"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --kiosk-printing --user-data-dir="C:\IceFishWeigh" https://twinrig.github.io/ice-fishing-tracker/?tab=weighin`
+   - **Close every Chrome (or Edge) window first.** The flag only takes effect when the browser starts; that's why the
+     separate `--user-data-dir` profile is used. Sign in to the tracker once in that window.
+   - With `--kiosk-printing` Chrome prints straight to the **default printer** with the last-used settings
+     (step 4), so set those first. If tickets come out tiny or blank, open the dialog once without the flag and
+     re-check Margins None / paper 62mm.
+   - Optional: add `--kiosk` too for a full-screen station (exit with Alt+F4).
+6. Test: weigh a test fish. A ticket should print with no dialog, and the cursor should go back to the number box.
+
+On a Mac or Linux laptop the flag is the same, e.g.
+`open -na "Google Chrome" --args --kiosk-printing --user-data-dir=$HOME/IceFishWeigh https://twinrig.github.io/ice-fishing-tracker/?tab=weighin`.
 
 ## Colors / theme
 

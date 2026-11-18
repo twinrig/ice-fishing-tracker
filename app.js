@@ -275,8 +275,11 @@ async function onSession(session) {
   S.issues = null;
   if (S.user && !KIOSK) {
     const { data, error } = await sb.from('staff_roles').select('role, display_name').eq('user_id', S.user.id);
-    if (!error) { S.roles = normalizeRoles(data.map(r => r.role)); LS.set('ift.roles.' + S.user.id, S.roles); }
-    else S.roles = normalizeRoles(LS.get('ift.roles.' + S.user.id, []));
+    if (!error) {
+      S.roles = normalizeRoles(data.map(r => r.role)); LS.set('ift.roles.' + S.user.id, S.roles);
+      S.staffName = data.find(r => r.display_name)?.display_name || ''; LS.set('ift.staffName.' + S.user.id, S.staffName);
+    }
+    else { S.roles = normalizeRoles(LS.get('ift.roles.' + S.user.id, [])); S.staffName = LS.get('ift.staffName.' + S.user.id, ''); }
   } else S.roles = [];
   await renderAuth();
   await loadTournamentList();
@@ -1130,19 +1133,57 @@ function printParticipantCard(p) {
     });
   }, 30);
 }
-function printWeighTicket(p, c) {
+// Weigh ticket: sized for a Brother QL-800 with 62mm continuous tape (see @page ticket in index.html), black only.
+function weighTicketHtml(p, c, { reprint = false, weigher = '' } = {}) {
   const sp = S.species.find(s => s.id === c.species_id)?.name || '';
-  showPrintPreview(`<div class="print-ticket">
-      <div class="font-bold text-xs">WEIGH TICKET</div>
-      <div class="font-bold">${esc(p.display_name)}</div>
-      <div class="font-mono text-xs">${esc(p.participant_code || '')}</div>
-      <div>${esc(sp)}</div>
-      <div class="text-lg font-bold">${formatLbs(c.weight_lbs)}</div>
-      <div>${new Date(c.weighed_at).toLocaleTimeString()}</div>
-      <div class="text-xs">${esc(c.station || '')}</div>
-      <div class="font-mono text-[9px] mt-1">${c.ticket_no ? 'Ticket #' + c.ticket_no + ' • ' : ''}${ticketCode(c)}</div>
-    </div>`);
+  const when = c.weighed_at ? new Date(c.weighed_at) : new Date();
+  const dt = when.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
+    when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const by = [c.station && 'Station ' + c.station, weigher && 'Weighed by ' + weigher].filter(Boolean).join(' • ');
+  return `<div class="print-ticket">
+      <img src="assets/logo-ice-fish-fest.jpg" alt="" class="tk-logo">
+      <div class="tk-event">${esc(S.t?.name || 'Ice Fish Fest')}</div>
+      <div class="tk-title">WEIGH TICKET${reprint ? ' – REPRINT' : ''}</div>
+      <div class="tk-no">${c.ticket_no ? 'Ticket #' + c.ticket_no : 'Ticket'} <span class="tk-code">${ticketCode(c)}</span></div>
+      <div class="tk-name">${esc(p.display_name)}</div>
+      <div class="tk-badge">Badge ${esc(p.participant_code || 'pending')}${p.age_group ? ' • ' + esc(p.age_group) : ''}</div>
+      <div class="tk-species">${esc(sp)}</div>
+      <div class="tk-weight">${formatLbs(c.weight_lbs)}</div>
+      <div class="tk-when">${esc(dt)}</div>
+      ${by ? `<div class="tk-by">${esc(by)}</div>` : ''}
+      ${c.status === 'voided' ? '<div class="tk-void">VOIDED – does not count</div>' : ''}
+    </div>`;
 }
+function autoPrintOn() { return LS.get('ift.autoPrint', true) !== false; }
+function setAutoPrint(on) { LS.set('ift.autoPrint', !!on); }
+// Prints straight from the hidden print-only #printArea (no preview), so the worker stays on the weigh-in screen.
+// Chrome/Edge started with --kiosk-printing skip the dialog and print to the default printer.
+async function printWeighTicket(p, c, opts = {}) {
+  // Online: wait briefly for the server-assigned ticket # so it's on the paper (offline prints the code only).
+  if (!c.ticket_no && S.online && !opts.reprint) {
+    for (let i = 0; i < 25 && !c.ticket_no; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      const live = S.catches.find(x => x.id === c.id); if (live?.ticket_no) c = { ...c, ticket_no: live.ticket_no };
+    }
+  }
+  const area = $('printArea');
+  area.innerHTML = weighTicketHtml(p, c, opts);
+  await Promise.all([...area.querySelectorAll('img')].map(img => (img.decode ? img.decode() : Promise.resolve()).catch(() => {})));
+  S.printCount = (S.printCount || 0) + 1;
+  // Page size only while a ticket prints (badge cards keep their own setup): 62mm continuous tape, 2mm margins.
+  let pg = $('ticketPageCss');
+  if (!pg) { pg = document.createElement('style'); pg.id = 'ticketPageCss'; document.head.appendChild(pg); }
+  pg.textContent = '@page { size: 62mm 85mm; margin: 2mm; } @media print { html, body { background: #fff !important; } body > *:not(#printArea) { display: none !important; } #printArea { position: static !important; } }';
+  doPrint();
+  if (!S.keepTicketPage) pg.textContent = '';
+  setTimeout(() => { if (S.tab === 'weighin' && $('ticketModal')?.classList.contains('hidden')) $('scanNum')?.focus(); }, 0);
+}
+function reprintLastTicket() {
+  const lt = S.lastTicket; if (!lt) return msg('weighMsg', 'No ticket printed on this laptop yet.', false);
+  const c = S.catches.find(x => x.id === lt.cid) || lt.c; const p = S.participants.find(x => x.id === c.participant_id) || lt.p;
+  printWeighTicket(p, c, { reprint: true, weigher: lt.weigher });
+}
+function updateReprintBtn() { const b = $('reprintLastBtn'); if (b) b.disabled = !S.lastTicket; }
 
 // ---------------------------------------------------------------- weigh
 function saveStationName() { LS.set('ift.station', $('stationName').value.trim()); }
@@ -1173,7 +1214,9 @@ function submitWeighIn() {
   };
   enqueue({ kind: 'insert', table: 'catches', row: { ...row } });
   const local = S.catches.find(c => c.id === row.id); if (local) local.recorded_by = S.user?.id;
-  printWeighTicket(p, row);
+  const weigher = S.staffName || S.user?.email || '';
+  S.lastTicket = { cid: row.id, c: { ...row }, p, weigher }; updateReprintBtn();
+  if (autoPrintOn()) printWeighTicket(p, { ...row }, { weigher });
   $('weightLbs').value = '';
   $('weighForm').classList.add('hidden'); S.currentParticipant = null;
   msg('weighMsg', `Recorded ${speciesName(row.species_id)} ${formatLbs(total)} for ${p.display_name}`);
@@ -1275,7 +1318,7 @@ function restoreTicket() {
 }
 function reprintTicket() {
   const c = S.catches.find(x => x.id === S.ticketId); const p = c && S.participants.find(x => x.id === c.participant_id);
-  if (c && p) printWeighTicket(p, c);
+  if (c && p) printWeighTicket(p, c, { reprint: true, weigher: S.lastTicket?.cid === c.id ? S.lastTicket.weigher : '' });
 }
 async function loadTicketHistory(id) {
   const el = $('tkHistory');
@@ -1623,6 +1666,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (SCREEN_MODE) document.body.classList.add('screen-mode');
   if (BOARD_MODE) { document.body.classList.add('board-mode'); document.title = 'Leaderboard'; }
   $('stationName').value = LS.get('ift.station', '') || '';
+  if ($('autoPrint')) $('autoPrint').checked = autoPrintOn();
+  updateReprintBtn();
   renderConn();
   const { data } = await sb.auth.getSession();
   await onSession(data.session);

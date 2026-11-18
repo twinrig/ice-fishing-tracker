@@ -48,12 +48,27 @@
   .rank-1 { background: var(--brand-red); color: #fff; border-radius: 9999px; padding: 0 .45em; }
   #displayBoard .rank-1 { padding: 0 .35em; }
   #mainNav { border-bottom: 2px solid var(--brand-blue); }
-  .print-card, .print-ticket {
+  .print-card {
     width: 2.4in; /* ~62mm for Brother QL-800 */
     background: white; border: 1px solid #ccc; padding: 8px; font-size: 11px; text-align: center;
   }
   .print-card { height: 3.5in; }
-  .print-ticket { height: 2.2in; }
+  /* Weigh ticket: 62mm continuous tape (Brother QL-800, DK-22205), 2mm margins => 58mm content, black only. */
+  /* The @page size (62mm x 85mm, 2mm margins) is added by printWeighTicket() only while a ticket prints. */
+  .print-ticket { width: 58mm; box-sizing: border-box; padding: 1mm 1.5mm; background: #fff; color: #000;
+    font-family: Arial, Helvetica, sans-serif; text-align: center; line-height: 1.15; border: 1px dashed #999; }
+  .print-ticket .tk-logo { display: block; width: 34mm; margin: 0 auto 1mm; filter: grayscale(1) contrast(1.4); }
+  .print-ticket .tk-event { font-size: 9pt; font-weight: 700; }
+  .print-ticket .tk-title { font-size: 8pt; letter-spacing: .08em; margin-top: .5mm; }
+  .print-ticket .tk-no { font-size: 10pt; font-weight: 700; margin-top: .5mm; }
+  .print-ticket .tk-code { font-family: ui-monospace, Consolas, monospace; font-weight: 400; font-size: 8pt; }
+  .print-ticket .tk-name { font-size: 15pt; font-weight: 800; margin-top: 1.5mm; overflow-wrap: anywhere; }
+  .print-ticket .tk-badge { font-size: 9pt; font-family: ui-monospace, Consolas, monospace; }
+  .print-ticket .tk-species { font-size: 13pt; font-weight: 700; margin-top: 1.5mm; text-transform: uppercase; }
+  .print-ticket .tk-weight { font-size: 26pt; font-weight: 900; line-height: 1.05; }
+  .print-ticket .tk-when { font-size: 9pt; margin-top: 1mm; }
+  .print-ticket .tk-by { font-size: 8pt; }
+  .print-ticket .tk-void { font-size: 11pt; font-weight: 800; border: 2px solid #000; margin-top: 1mm; }
   .print-card svg { margin: 0 auto; max-width: 100%; }
   #printArea { display: none; }
   @media print {
@@ -62,6 +77,7 @@
     #printArea, #printArea * { visibility: visible; }
     #printArea { position: absolute; left: 0; top: 0; }
     #printArea .print-card, #printArea .print-ticket { border: none; }
+    #printArea .print-ticket { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
   .board-tabs { scrollbar-width: thin; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
   .board-tabs button { scroll-snap-align: start; flex: 0 0 auto; }
@@ -269,6 +285,10 @@
           <label class="block text-sm font-medium">Weight (lbs, decimals OK)</label>
           <input id="weightLbs" type="number" inputmode="decimal" min="0.01" max="500" step="0.01" placeholder="e.g. 2.35" class="w-full border rounded px-3 py-2 text-lg" onkeydown="if(event.key==='Enter') submitWeighIn()">
           <button onclick="submitWeighIn()" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold">Submit & Print Ticket</button>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2 mt-3 text-sm">
+          <label class="flex items-center gap-2" title="Saved on this laptop only"><input type="checkbox" id="autoPrint" checked onchange="setAutoPrint(this.checked)"> Auto-print tickets</label>
+          <button id="reprintLastBtn" onclick="reprintLastTicket()" class="border px-3 py-1.5 rounded-lg disabled:opacity-40" disabled>🖨 Reprint last ticket</button>
         </div>
         <div id="weighMsg" class="mt-2 text-sm"></div>
       </div>
@@ -521,7 +541,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261118e"></script>
-<script src="app.js?v=20261118e"></script>
+<script src="config.js?v=20261118f"></script>
+<script src="app.js?v=20261118f"></script>
 </body>
 </html>
