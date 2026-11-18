@@ -11,14 +11,17 @@ const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
 });
 
-const ROLE_LABEL = { admin: 'Admin 🔒', gate: 'Gate / Registration', weigh: 'Weigh Station', screen: 'Big Screen' };
+// Two modes: Admin (everything; switching in needs the PIN) and Normal (registration, weigh-in incl. ticket edits,
+// leaderboard, big screen, report issues). An admin account can use either; a normal account only Normal.
+const ROLE_LABEL = { admin: 'Admin 🔒', normal: 'Normal' };
 const ROLE_TABS = {
   admin: ['setup', 'participants', 'weighin', 'leaderboard', 'display', 'issues'],
-  gate: ['participants', 'leaderboard', 'display'],
-  weigh: ['weighin', 'leaderboard', 'display'],
-  screen: ['display', 'leaderboard'],
+  normal: ['participants', 'weighin', 'leaderboard', 'display'],
   public: ['leaderboard', 'display']
 };
+// Older cached roles (gate / weigh / screen) are Normal now.
+function normalizeRoles(roles) { return [...new Set((roles || []).map(r => r === 'admin' ? 'admin' : 'normal'))]; }
+function availableModes() { return S.roles.includes('admin') ? ['admin', 'normal'] : S.roles.includes('normal') ? ['normal'] : []; }
 const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { console.warn('localStorage full?', e); } },
@@ -81,7 +84,7 @@ function round2(n) { return Math.round(Number(n) * 100) / 100; }
 function msg(id, text, ok = true) { const el = $(id); if (!el) return; el.textContent = text; el.className = (el.className.replace(/text-(red|green)-\d+/g, '') + (ok ? ' text-green-700' : ' text-red-600')).trim(); }
 function closeModal(id) { $(id)?.classList.add('hidden'); }
 function openModal(id) { $(id)?.classList.remove('hidden'); }
-function canReadData() { return S.roles.some(r => ['admin', 'gate', 'weigh'].includes(r)); }
+function canReadData() { return S.roles.some(r => r === 'admin' || r === 'normal'); }
 // Admin accounts always have gate/weigh/screen rights; admin-only rights need Admin mode (PIN-unlocked).
 function hasRole(r) {
   if (r === 'admin') return S.roles.includes('admin') && S.role === 'admin';
@@ -272,8 +275,8 @@ async function onSession(session) {
   S.issues = null;
   if (S.user && !KIOSK) {
     const { data, error } = await sb.from('staff_roles').select('role, display_name').eq('user_id', S.user.id);
-    if (!error) { S.roles = data.map(r => r.role); LS.set('ift.roles.' + S.user.id, S.roles); }
-    else S.roles = LS.get('ift.roles.' + S.user.id, []);
+    if (!error) { S.roles = normalizeRoles(data.map(r => r.role)); LS.set('ift.roles.' + S.user.id, S.roles); }
+    else S.roles = normalizeRoles(LS.get('ift.roles.' + S.user.id, []));
   } else S.roles = [];
   await renderAuth();
   await loadTournamentList();
@@ -286,10 +289,10 @@ async function renderAuth() {
   $('issueBtn').classList.toggle('hidden', !(signedIn && S.roles.length && !KIOSK)); // staff only; never on public pages
   $('userBadge').textContent = signedIn ? S.user.email + (S.roles.length ? '' : ' (no staff role yet)') : '';
   const rs = $('roleSelect');
-  const roles = S.roles.includes('admin') ? ['admin', 'gate', 'weigh', 'screen'] : S.roles;
+  const roles = availableModes();
   rs.innerHTML = roles.map(r => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join('');
-  rs.classList.toggle('hidden', !roles.length);
-  const saved = LS.get('ift.stationRole', null);
+  rs.classList.toggle('hidden', roles.length < 2); // only admin accounts get the Admin / Normal picker
+  const saved = normalizeRoles([LS.get('ift.stationRole', null)].filter(Boolean))[0];
   let role = roles.includes(saved) ? saved : (roles[0] || 'public');
   // Admin mode survives a reload only while this sign-in's PIN unlock is still valid.
   if (role === 'admin' && !(await adminStillUnlocked())) role = firstWorkerRole(roles);
@@ -371,8 +374,7 @@ function lockAdmin(reason) {
 function dropToWorkerMode(reason) {
   if (S.role !== 'admin') return;
   lockAdmin(reason);
-  const roles = S.roles.includes('admin') ? ['admin', 'gate', 'weigh', 'screen'] : S.roles;
-  applyRole(firstWorkerRole(roles));
+  applyRole(firstWorkerRole(availableModes()));
 }
 let adminTimer = null, lastActivity = Date.now(), lastKeepAlive = 0;
 ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true }));
@@ -983,7 +985,7 @@ function populateSelects() {
 
 function codePoolKey() { return 'ift.codes.' + S.tid; }
 async function ensureCodePool() {
-  if (!S.tid || !hasRole('gate') || !S.online || !S.session) return;
+  if (!S.tid || !hasRole('normal') || !S.online || !S.session) return;
   const used = new Set(S.participants.map(p => p.participant_code));
   let pool = LS.get(codePoolKey(), []).filter(c => !used.has(c));
   if (pool.length < 10) {
@@ -1070,7 +1072,7 @@ function saveParticipantModal() {
 
 function renderParticipants() {
   const el = $('participantList'); if (!el) return;
-  if (!canReadData()) { el.innerHTML = '<p class="text-slate-500">Sign in as gate or admin staff.</p>'; return; }
+  if (!canReadData()) { el.innerHTML = '<p class="text-slate-500">Sign in with a staff account.</p>'; return; }
   const f = $('partFilter').value.trim().toLowerCase();
   const list = S.participants.filter(p => f === '!' ? needsDivisionFix(p) : !f || p.display_name.toLowerCase().includes(f) || (p.participant_code || '').includes(f))
     .sort((a, b) => (a.participant_code || 'z').localeCompare(b.participant_code || 'z'));
@@ -1180,7 +1182,7 @@ function submitWeighIn() {
 // ---- Find / edit weigh tickets (weigh + admin). Edits go through the offline queue as absolute-value updates.
 function ticketCode(c) { return c.id.replace(/-/g, '').slice(0, 8).toUpperCase(); }
 function ticketLabel(c) { return c.ticket_no ? `#${c.ticket_no}` : '#…'; }
-function canEditTickets() { return hasRole('weigh'); }
+function canEditTickets() { return hasRole('normal'); }
 function ticketMatches(c, q, p, sp) {
   if (!q) return true;
   const year = S.t?.year;
@@ -1339,8 +1341,11 @@ const BOARD_NOTE = {
 function boardSections(b) { return b.groups ? b.groups : [{ name: null, rows: b.rows || [] }]; }
 function boardHasData(b) { return boardSections(b).some(s => s.rows.length); }
 // Each row: rank, name, then the counted fish's species and weight (e.g. "Walleye 4.00 lbs").
-function rowsHtml(rows, compact) {
-  return rows.map(r => `<div class="flex justify-between gap-3 ${compact ? 'py-1.5 px-2' : 'py-2'} border-b"><span class="min-w-0 truncate"><span class="font-semibold ${r.rank === 1 ? 'rank-1' : 'text-blue-900'}">${r.rank}.</span> ${esc(r.name)}</span><span class="whitespace-nowrap"><span class="text-slate-600">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
+// Rows: Rank + Name | Species | Weight as aligned columns (Overall / Youth Divisions); Species boards: Name | Weight.
+function rowsHtml(rows, compact, showSpecies = true) {
+  const pad = compact ? 'px-2' : '';
+  const head = rows.length ? `<div class="flex gap-3 ${pad} pb-1 border-b text-xs uppercase tracking-wide text-slate-500"><span class="flex-1">Angler</span>${showSpecies ? '<span class="w-24 sm:w-32">Species</span>' : ''}<span class="w-20 sm:w-24 text-right">Weight</span></div>` : '';
+  return head + rows.map(r => `<div class="flex items-baseline gap-3 ${compact ? 'py-1.5' : 'py-2'} ${pad} border-b"><span class="flex-1 min-w-0 truncate"><span class="font-semibold ${r.rank === 1 ? 'rank-1' : 'text-blue-900'}">${r.rank}.</span> ${esc(r.name)}</span>${showSpecies ? `<span class="w-24 sm:w-32 truncate text-slate-600">${esc(r.species || '')}</span>` : ''}<span class="w-20 sm:w-24 text-right font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('')
     || `<div class="text-sm text-slate-500 ${compact ? 'px-2 py-1' : ''}">No fish yet</div>`;
 }
 // Collapsed group sections on grouped boards, remembered per tournament + board on this device.
@@ -1398,7 +1403,7 @@ function renderLeaderboard() {
           <span>${esc(g.name)} <span class="normal-case font-normal text-slate-500">(${g.rows.length})</span></span>
           <svg class="w-4 h-4 transition-transform ${shut ? '-rotate-90' : ''}" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
         </button>
-        <div class="${shut ? 'hidden' : ''}">${rowsHtml(g.rows, true)}</div>
+        <div class="${shut ? 'hidden' : ''}">${rowsHtml(g.rows, true, b.key !== 'species')}</div>
       </section>`; }).join('') || '<div class="text-sm text-slate-500">No sections</div>' : rowsHtml(b.rows)}`;
   const active = $('boardTabs').children[idx];
   if (active && S.lastBoardIdx !== idx) { const c = $('boardTabs'); c.scrollLeft = active.offsetLeft - (c.clientWidth - active.offsetWidth) / 2; S.lastBoardIdx = idx; }
@@ -1469,10 +1474,11 @@ function tvTick(now) {
   if (TV.y > max) TV.y = max;
   inner.style.transform = `translateY(${-Math.round(TV.y)}px)`;
 }
-function tvRows(rows, n, big) {
-  return rows.slice(0, n).map(r => `<div class="flex justify-between gap-4 border-b border-[color:var(--tv-line)] ${big ? 'py-2' : 'py-1 text-2xl'}">
-      <span class="min-w-0 truncate"><span class="${r.rank === 1 ? 'rank-1' : ''}">${r.rank}.</span> ${esc(r.name)}</span>
-      <span class="whitespace-nowrap"><span class="text-sky-200">${esc(r.species || '')}</span> <span class="font-bold">${formatLbs(r.lbs)}</span></span></div>`).join('')
+function tvRows(rows, n, big, showSpecies = true) {
+  return rows.slice(0, n).map(r => `<div class="flex items-baseline gap-4 border-b border-[color:var(--tv-line)] ${big ? 'py-2' : 'py-1 text-2xl'}">
+      <span class="flex-1 min-w-0 truncate"><span class="${r.rank === 1 ? 'rank-1' : ''}">${r.rank}.</span> ${esc(r.name)}</span>
+      ${showSpecies ? `<span class="${big ? 'w-56' : 'w-40'} truncate text-sky-200">${esc(r.species || '')}</span>` : ''}
+      <span class="${big ? 'w-44' : 'w-36'} text-right font-bold whitespace-nowrap">${formatLbs(r.lbs)}</span></div>`).join('')
     || `<p class="text-sky-200/60 text-xl py-1">No fish yet</p>`;
 }
 function tvHtml(data) {
@@ -1483,7 +1489,7 @@ function tvHtml(data) {
   let h = '';
   if (overall) h += `<section class="mb-10">${head('Overall – Top ' + TV_TOP.overall)}${tvRows(overall.rows, TV_TOP.overall, true)}</section>`;
   if (youth?.groups?.length) h += `<section class="mb-10">${head('Youth Divisions – Top ' + TV_TOP.youth)}<div class="grid grid-cols-1 xl:grid-cols-2 gap-x-10">${youth.groups.map(g => `<div>${sub(g.name)}${tvRows(g.rows, TV_TOP.youth)}</div>`).join('')}</div></section>`;
-  if (species?.groups?.length) h += `<section class="mb-10">${head('Species – Top ' + TV_TOP.species)}<div class="grid grid-cols-1 xl:grid-cols-2 gap-x-10">${species.groups.map(g => `<div>${sub(g.name)}${tvRows(g.rows, TV_TOP.species)}</div>`).join('')}</div></section>`;
+  if (species?.groups?.length) h += `<section class="mb-10">${head('Species – Top ' + TV_TOP.species)}<div class="grid grid-cols-1 xl:grid-cols-2 gap-x-10">${species.groups.map(g => `<div>${sub(g.name)}${tvRows(g.rows, TV_TOP.species, false, false)}</div>`).join('')}</div></section>`;
   return h;
 }
 function renderDisplay() {

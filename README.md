@@ -18,15 +18,16 @@ Several gate laptops, weigh stations, an admin laptop and a big-screen TV share 
 
 | Role | Can do |
 | --- | --- |
-| `admin` | Everything: tournaments, species, leaderboards, imports, exports, corrections |
-| `gate` | Register walk-ups, import participants, find people and print badge cards |
-| `weigh` | Record weigh-ins and void their own mistakes |
-| `screen` | Read-only staff view (big screen / leaderboard) |
+| `admin` | **Admin mode** (needs the PIN): everything – Setup (tournaments, species, divisions, big screen, imports, exports), the Issues tab, deleting – plus everything Normal can do |
+| `normal` | **Normal mode**: Participants (walk-ups, find people, print badge cards), Weigh-in (record, find / edit / void / restore tickets), Leaderboard, Big Screen, and Report an issue (own reports only). No Setup, no Issues management |
 | public (not signed in) | Leaderboard only: names, placements, species and weight (lbs) of each counted fish. No emails, phones, ages or ticket types. |
 
-A signed-in account with no role in `staff_roles` can see nothing.
+A signed-in account with no role in `staff_roles` can see nothing. There are only two modes (Nov 2026 – the old gate /
+weigh / screen roles were merged into `normal`). Admin accounts can use both modes: workers use an admin-signed-in
+laptop in **Normal** mode, and switching to **Admin** asks for the PIN. A `normal` account only has Normal mode (no
+mode picker).
 
-**Live updates.** Staff stations (gate/weigh/admin) get changes instantly through Supabase Realtime.
+**Live updates.** Staff stations get changes instantly through Supabase Realtime.
 The public leaderboard and the big screen don't use Realtime (the free plan allows 200 live connections).
 Instead they call one small function, `get_leaderboard`, every 45 s (public) or 15 s (TV). If nothing changed
 since the last call, the reply is about 30 bytes, so several hundred phones watching all day stays well inside the
@@ -53,8 +54,7 @@ refreshes every 45 s. Older links (`?t=<id>` on its own, or with only `#board=�
 **Big screen URL (no sign-in needed):** `https://twinrig.github.io/ice-fishing-tracker/?t=<tournament id>&screen=1`.
 
 **Staff** use the plain address `https://twinrig.github.io/ice-fishing-tracker/`. The full app keeps the current
-tournament and screen in the address (`?t=…&tab=…`), so reloads stay put. Switching mode (Admin / Gate / Weigh /
-Big Screen) jumps to that mode's main screen; the tournament picker at the top applies to every screen and is remembered.
+tournament and screen in the address (`?t=…&tab=…`), so reloads stay put. Switching mode (Admin / Normal) jumps to that mode's main screen; the tournament picker at the top applies to every screen and is remembered.
 The admin Setup tab shows the exact links for the selected tournament.
 
 ## One-time setup (admin)
@@ -66,17 +66,17 @@ The admin Setup tab shows the exact links for the selected tournament.
 3. **Give them a role.** Open the SQL Editor and run (change the email, role and name):
 
 ```sql
--- roles: 'admin', 'gate', 'weigh', 'screen'
+-- roles: 'admin' or 'normal'
 insert into public.staff_roles (user_id, role, display_name)
 select id, 'admin', 'Chris'
 from auth.users
 where email = 'you@example.com'
 on conflict (user_id, role) do nothing;
 
--- one person can have several roles
+-- a worker / station account (Normal mode only)
 insert into public.staff_roles (user_id, role, display_name)
-select id, r, 'Gate + Weigh volunteer'
-from auth.users, unnest(array['gate','weigh']) as r
+select id, 'normal', 'Gate laptop 1'
+from auth.users
 where email = 'volunteer@example.com'
 on conflict (user_id, role) do nothing;
 
@@ -111,7 +111,8 @@ To remove someone completely, delete their user in Authentication → Users (the
   - **Species** – a section per species, ranked by each angler's biggest fish **of that species**.
   - Example: Bob weighs crappie 2, bass 3, bass 3.5, walleye 4 → Overall shows his 4.00 lb walleye; Bass shows his
     3.50 lb bass; Crappie shows his 2.00 lb crappie.
-- Each row shows rank, name, then the species and weight of the counted fish (e.g. `Walleye 4.00 lbs`). No division text.
+- Overall and Youth Divisions show aligned columns **Angler | Species | Weight** (the counted fish). Species
+  sections show **Angler | Weight** only (the section is the species). No division text. Same on the big screen.
 - Ties share a rank (listed by name). Voided tickets don't count.
 - The **Leaderboard** page lists **everyone** on each board. Youth Divisions and Species sections **start folded** –
   tap a heading to open it (remembered on that device).
@@ -134,8 +135,8 @@ staff app and the public leaderboard, and above the big-screen leaderboard (up t
 
 ## Admin PIN
 
-Only a few admin accounts sign in. An admin signs a laptop in, then workers use it in **Gate**, **Weigh** or
-**Big Screen** mode. Switching that laptop into **Admin** mode asks for the admin PIN.
+Only a few admin accounts sign in. An admin signs a laptop in, then workers use it in **Normal** mode
+(registration, weigh-in, leaderboard, big screen). Switching that laptop into **Admin** mode asks for the admin PIN.
 
 **Set or change the PIN:** Supabase dashboard → **Table Editor**
 (https://supabase.com/dashboard/project/cqnqqjaoeqsdakrdijzr/editor) → schema `public` → table **`app_settings`** →
@@ -147,11 +148,11 @@ It takes effect immediately on every laptop. Clear the cell (NULL) to block Admi
 - **5 wrong tries → locked for 5 minutes** (per admin account).
 - A correct PIN unlocks Admin for that sign-in on that laptop only. The database itself refuses admin-only changes
   (Setup, tournament/board edits, deleting a tournament) unless that sign-in is unlocked, so hiding the
-  menu isn't the only protection. Admin accounts can always do Gate / Weigh / Big Screen work without the PIN.
+  menu isn't the only protection. Admin accounts can always do Normal-mode work without the PIN.
 - **Locks again** when you pick another mode, sign out, after **10 minutes without activity**, or 30 minutes after the
   last activity check (it's kept alive while you're using it).
 - **Offline:** the PIN can't be checked without internet, so Admin mode can't be entered offline. A laptop that was
-  already unlocked stays in Admin until the unlock time runs out; Gate and Weigh keep working offline as before.
+  already unlocked stays in Admin until the unlock time runs out; Normal mode keeps working offline as before.
 - On the local VM copy, set the PIN the same way in its Studio (http://192.168.1.127:54323 → Table Editor → `app_settings`).
 
 ## Tournament day checklist
@@ -211,7 +212,7 @@ signed-in staff account (`recorded_by`) and the station name set on that laptop.
 
 ## Finding and editing weigh tickets
 
-Weigh-in tab → **Find / edit tickets** (Weigh Station and Admin). The list shows the newest tickets first; search by
+Weigh-in tab → **Find / edit tickets** (Normal and Admin). The list shows the newest tickets first; search by
 angler name, angler number (`2027_00012` or just `12`), ticket number (`#42` or `42`), or the code printed on the
 ticket (e.g. `CD0E7848`). Tap a ticket to change the angler, species, weight or add a note, reprint it, or **Void**
 it (a reason is required; voided tickets are struck through, drop off every leaderboard, and can be **Restored**).
@@ -221,7 +222,7 @@ Edits work offline like weigh-ins and sync later; leaderboards update on their o
   angler's best fish automatically, so weighing a bigger fish of the same species simply moves them up.
 - Ticket numbers (#1, #2, …) are per tournament and assigned by the server when the weigh-in syncs (a ticket weighed
   offline shows `#…` until then; its printed code always works for searching).
-- Weigh staff can edit any ticket in the tournament; Gate can't. The database enforces this.
+- Any staff account (Normal or Admin) can edit any ticket in the tournament. The database enforces this.
 - Every edit, void and restore is logged with who (email) and when, showing old → new values (the ticket's
   "Change history"). The weigh-in CSV export includes ticket number, code, note and last-changed time.
 
@@ -237,7 +238,7 @@ and the big screen. Rank #1 gets a red badge. Icons: `assets/favicon-32.png`, `a
 
 ## Reporting issues (instead of GitHub Issues)
 
-Anyone signed in with a staff account (any role: admin, gate, weigh or screen) sees **⚑ Report an issue** at the top
+Anyone signed in with a staff account (Admin or Normal) sees **⚑ Report an issue** at the top
 of the staff app. It opens a form with **Title**, **Type** (Bug / Feature idea / Question), **Priority**
 (Low / Normal / High), **Description** and **Your name** (pre-filled with the account email; remembered on that
 device). These are attached automatically (shown under "Attached automatically"): the current screen and mode,
@@ -258,7 +259,7 @@ any admin notes, so the reporter can follow up. Reports need an internet connect
   access (e.g. Jim) can triage there without signing in to the app; rows can also be added there.
 - **Giving someone (e.g. a collaborator) the button:** create their login in Supabase → Authentication → Users →
   Add user (email + password; they can change it later), then add a row in `staff_roles` with their `user_id` and a
-  role. `screen` is the safest (read-only staff view + reporting); use `admin` only if they should also triage in the
+  role. `normal` gives the working screens + reporting; use `admin` only if they should also triage in the
   app (they'll need the admin PIN for the Issues tab).
 
 ## Deleting a tournament
