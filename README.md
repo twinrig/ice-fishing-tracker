@@ -227,8 +227,10 @@ Edits work offline like weigh-ins and sync later; leaderboards update on their o
 
 ## Colors / theme
 
-Site colors come from the logos and are CSS variables at the top of `index.html` (`--brand-blue` primary,
-`--brand-red` accent, `--brand-ice` / `--brand-ice-light` ice blue, `--tv-bg` / `--tv-bg-2` dark navy big screen).
+Site colors are sampled from the logos and are CSS variables at the top of `index.html`: `--brand-blue` #034da2
+(primary), `--brand-red-logo` #ec1d25 (logo red, decorative) and `--brand-red` #d0121b (same red one shade darker so white
+text passes WCAG AA – badges, alerts, danger), `--brand-cyan` #00ade0 (waves), `--brand-ice` #91c9de / `--brand-ice-light`
+#eaf5fa (backgrounds), `--tv-bg` #021d40 / `--tv-bg-2` #03306b (dark navy big screen).
 Tailwind's blue / red / sky color scales are mapped to them, so changing a variable re-themes buttons, tabs, headings
 and the big screen. Rank #1 gets a red badge. Icons: `assets/favicon-32.png`, `assets/icon-192.png`,
 `assets/apple-touch-icon.png` (180×180); footer logo: `assets/logo-catfish-bay.jpg` (hidden if missing).

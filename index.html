@@ -12,33 +12,34 @@
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.min.js"></script>
 <style>
-  /* ===== Brand colors (from the Catfish Bay / Ice Fish Fest logos). Tweak these to re-theme the whole site. =====
-     ESTIMATED from the description – replace with values sampled from the logo files. */
+  /* ===== Brand colors, sampled from the Catfish Bay / Ice Fish Fest logos. Tweak these to re-theme the site. ===== */
   :root {
-    --brand-blue: #1a4fa3;      /* "Catfish Bay" / "ICE FISH FEST" lettering – primary (buttons, tabs, headings) */
-    --brand-blue-dark: #12397a; /* hover / pressed */
-    --brand-blue-deep: #0c2654; /* headings on light, darkest text accents */
-    --brand-red: #c8102e;       /* "WATER SKI PARK" / banner red – accent (rank #1, highlights, alerts, danger) */
-    --brand-red-dark: #a00c24;
-    --brand-ice: #8fd3f0;       /* wave cyan / ice blue – accents on dark backgrounds */
-    --brand-ice-light: #e8f5fc; /* page background */
-    --brand-ice-50: #f3f9fd;
-    --tv-bg: #0b1f44;           /* big screen: dark navy derived from the brand blue */
-    --tv-bg-2: #102c5c;
-    --tv-line: #24467d;
+    --brand-blue: #034da2;      /* "Catfish Bay" / "ICE FISH FEST" lettering (exact) – primary: buttons, tabs, headings */
+    --brand-blue-dark: #023f86; /* hover / pressed */
+    --brand-blue-deep: #022a59; /* darkest blue (title text) */
+    --brand-red-logo: #ec1d25;  /* "WATER SKI PARK" red (exact) – decorative only (white text on it is 4.4:1) */
+    --brand-red: #d0121b;       /* same red, one shade darker so white text passes WCAG AA (5.6:1) – badges, alerts, danger */
+    --brand-red-dark: #a80e16;
+    --brand-cyan: #00ade0;      /* wave cyan (exact) – accents on the dark big screen */
+    --brand-ice: #91c9de;       /* banner ice blue (exact) */
+    --brand-ice-light: #eaf5fa; /* page background (tint of the ice blue) */
+    --tv-bg: #021d40;           /* big screen: dark navy derived from the brand blue */
+    --tv-bg-2: #03306b;
+    --tv-line: #1d4f8f;
   }
 </style>
 <style type="text/tailwindcss">
   /* Map Tailwind's blue / red / sky scales to the brand colors so existing classes pick them up. */
   @theme {
-    --color-blue-50: #eef4fb; --color-blue-100: #dbe7f6; --color-blue-200: #b9cfee; --color-blue-300: #8eb0e0;
-    --color-blue-400: #5a88cc; --color-blue-500: #2d62b6; --color-blue-600: var(--brand-blue); --color-blue-700: var(--brand-blue-dark);
-    --color-blue-800: #0f2f66; --color-blue-900: var(--brand-blue-deep);
-    --color-red-50: #fdedf0; --color-red-100: #f9d3da; --color-red-200: #f2a7b4; --color-red-300: #e97a8d;
-    --color-red-400: #dc4560; --color-red-500: #d01f3d; --color-red-600: var(--brand-red); --color-red-700: var(--brand-red-dark);
-    --color-red-800: #7e0a1d;
-    --color-sky-200: #c5e9f8; --color-sky-300: var(--brand-ice); --color-sky-700: #2b6fa3; --color-sky-800: #1e4f7a;
+    --color-blue-50: #edf3fa; --color-blue-100: #d6e4f4; --color-blue-200: #adc8e9; --color-blue-300: #7fa7da;
+    --color-blue-400: #4a80c6; --color-blue-500: #1f62b3; --color-blue-600: var(--brand-blue); --color-blue-700: var(--brand-blue-dark);
+    --color-blue-800: #02336c; --color-blue-900: var(--brand-blue-deep);
+    --color-red-50: #fdeced; --color-red-100: #fbd2d4; --color-red-200: #f6a5a8; --color-red-300: #f1777c;
+    --color-red-400: #ee4a50; --color-red-500: var(--brand-red-logo); --color-red-600: var(--brand-red); --color-red-700: var(--brand-red-dark);
+    --color-red-800: #7f0b11;
+    --color-sky-200: var(--brand-ice); --color-sky-300: var(--brand-cyan); --color-sky-700: #0a6f9a; --color-sky-800: #0b4f72;
   }
+
   @layer base { *, ::after, ::before, ::backdrop { border-color: var(--color-slate-200, #e2e8f0); } button:not(:disabled) { cursor: pointer; } }
 </style>
 <style>
@@ -520,7 +521,7 @@
   </div>
 </div>
 
-<script src="config.js?v=20261118c"></script>
-<script src="app.js?v=20261118c"></script>
+<script src="config.js?v=20261118d"></script>
+<script src="app.js?v=20261118d"></script>
 </body>
 </html>
